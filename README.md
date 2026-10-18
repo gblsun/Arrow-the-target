@@ -2,6 +2,8 @@
 
 AP2 de Computação Gráfica e RV/RA (CC6AM, 2026.2).
 
+Documentação técnica (arquitetura, pipeline gráfico, gestos, calibração, câmeras, parâmetros e requisitos): [docs/DOCUMENTACAO.md](docs/DOCUMENTACAO.md).
+
 Torneio de tiro com arco numa clareira da floresta. A mira é feita com as mãos por duas webcams (frontal e lateral), imitando um arco: a mão esquerda segura o arco e a direita puxa a corda e solta a flecha. A cena 3D é renderizada "na mão" com pygame e matrizes numpy (sem OpenGL), como nos exemplos de `ref/exercicios/pygame_aulas_1_a_9`.
 
 ## Como rodar
@@ -97,6 +99,7 @@ Para usar **duas DroidCams**, cada celular precisa estar transmitindo numa fonte
 ```
 docs/
   enunciado_AP2.pdf          enunciado da avaliação
+  DOCUMENTACAO.md            documentação técnica do projeto
 src/
   main.py                    laço do jogo e máquina de estados
   mat3d.py                   matrizes 4x4, câmera, projeção, interpolação

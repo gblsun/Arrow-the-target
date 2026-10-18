@@ -202,22 +202,6 @@ class Hud:
         self.texto(tela, "Tab: escolher câmeras   ·   K: calibrar de novo   ·   Esc: sair", self.f_pequena,
                    (200, 186, 160), (cx, rect.bottom + 84), "center")
 
-    def tela_calibracao(self, tela, etapa, progresso, entrada):
-        from entrada import ETAPAS_CALIBRACAO
-        self.escurecer(tela, 110)
-        cx, cy = self.largura // 2, self.altura // 2 - 60
-        titulo, instrucoes = ETAPAS_CALIBRACAO[etapa]
-        self.texto(tela, f"Calibração {etapa + 1}/2: {titulo}", self.f_grande, OURO, (cx, cy - 120), "center")
-        for i, l in enumerate(instrucoes + ["Fique parado até a barra encher.  Enter pula esta etapa."]):
-            self.texto(tela, l, self.f_pequena, PERGAMINHO, (cx, cy - 60 + i * 28), "center")
-        rect = pygame.Rect(0, 0, 420, 26)
-        rect.center = (cx, cy + 60)
-        self.painel(tela, rect.inflate(10, 10))
-        pygame.draw.rect(tela, VERDE, (rect.x, rect.y, int(rect.w * progresso), rect.h), border_radius=6)
-        f, l = entrada.maos_frontal, entrada.maos_lateral
-        aviso = f"Mãos na câmera frontal: {f}   |   lateral: {l}"
-        self.texto(tela, aviso, self.f_pequena, VERDE if f >= 2 or l >= 2 else OURO, (cx, cy + 100), "center")
-
     def tela_pausa(self, tela):
         self.escurecer(tela, 140)
         self.texto(tela, "Pausado", self.f_titulo, OURO, (self.largura // 2, self.altura // 2 - 30), "center")
