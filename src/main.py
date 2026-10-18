@@ -1,9 +1,8 @@
 """Arrow the Target: tiro com arco numa clareira, mirando com as mãos pela webcam.
 
 Uso:
-    python src/main.py               # gestos (webcam) + mouse/teclado
-    python src/main.py --sem-camera  # apenas mouse/teclado
-    python src/main.py --camera 1    # escolhe outra webcam
+    python src/main.py                         # escolhe as câmeras na tela inicial, tela cheia
+    python src/main.py --sem-camera --janela   # mouse/teclado, em janela
 """
 import argparse
 import json
@@ -20,7 +19,9 @@ from entrada import Entrada
 from flecha import MALHA as MALHA_FLECHA
 from flecha import Flecha
 from hud import OURO, PERGAMINHO, VERDE, VERMELHO, Hud
-from render import Renderizador
+from modelos import arco_primeira_pessoa
+from render import Lote, Renderizador
+import telas
 
 LARGURA, ALTURA = 1280, 720
 TOTAL_FLECHAS = 15
@@ -31,7 +32,10 @@ DURACAO_TELEPORTE = 0.9
 RECARGA = 0.6
 VENTO_MAX = 3.0
 MAX_FLECHAS_CENA = 40
+POSICAO_ARCO = (-0.34, -0.2, 1.35)  # empunhadura em coordenadas de câmera (m)
+INCLINACAO_ARCO = -0.2  # arco levemente inclinado, como o arqueiro segura
 ARQUIVO_RECORDE = Path(__file__).with_name("recorde.json")
+ARQUIVO_CONFIG = Path(__file__).with_name("config.json")
 
 
 def carregar_recorde():
@@ -48,20 +52,30 @@ def salvar_recorde(valor):
         pass
 
 
+def carregar_config():
+    try:
+        return json.loads(ARQUIVO_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def salvar_config(dados):
+    try:
+        ARQUIVO_CONFIG.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
 class Jogo:
-    def __init__(self, usar_camera, indice_camera):
+    def __init__(self, usar_camera=True, tela_cheia=True):
         pygame.init()
-        self.tela = pygame.display.set_mode((LARGURA, ALTURA))
+        # Renderiza em 1280x720 e o SDL amplia para a tela inteira (SCALED mantém a proporção).
+        bandeiras = pygame.SCALED | (pygame.FULLSCREEN if tela_cheia else 0)
+        self.tela = pygame.display.set_mode((LARGURA, ALTURA), bandeiras)
         pygame.display.set_caption("Arrow the Target")
         self.relogio = pygame.time.Clock()
 
-        self.rastreador = None
-        if usar_camera:
-            from gestos import RastreadorMaos
-            self.rastreador = RastreadorMaos(indice_camera)
-            self.rastreador.start()
-
-        self.entrada = Entrada(self.rastreador, LARGURA, ALTURA)
+        self.entrada = Entrada(None, None, LARGURA, ALTURA)
         self.cena = Cena()
         self.render = Renderizador(LARGURA, ALTURA)
         self.hud = Hud(LARGURA, ALTURA)
@@ -73,6 +87,14 @@ class Jogo:
         self.novo_recorde = False
         self.mostrar_camera = True
         self.reiniciar()
+
+        # Câmeras: cada fonte encontrada ganha um rastreador; a escolha define frontal e lateral.
+        self.usar_camera = usar_camera
+        self.fontes, self.rastreadores, self.escolha, self.botoes = [], {}, {}, []
+        self.procurando = False
+        if usar_camera:
+            self.estado = "CAMERAS"
+            self.procurar_cameras(primeira_vez=True)
 
     # ---------------------------------------------------------------- estado da partida
 
@@ -97,12 +119,89 @@ class Jogo:
 
     @property
     def camera_ok(self):
-        return self.rastreador is not None and self.rastreador.ativo
+        return self.entrada.frontal is not None and self.entrada.frontal.ativo
+
+    @property
+    def lateral_ok(self):
+        return self.entrada.lateral is not None and self.entrada.lateral.ativo
 
     def mudar_estado(self, novo):
         self.estado = novo
         self.entrada.soltar_tudo()
         pygame.mouse.set_visible(novo != "JOGANDO")
+
+    # ---------------------------------------------------------------- câmeras
+
+    def procurar_cameras(self, primeira_vez=False):
+        from gestos import RastreadorMaos, listar_fontes
+        self.procurando = True
+        self.desenhar()
+        pygame.display.flip()
+        for rastreador in self.rastreadores.values():
+            rastreador.parar()
+        for rastreador in self.rastreadores.values():
+            rastreador.join(timeout=2.0)
+        self.rastreadores = {}
+        self.entrada.definir_cameras(None, None)
+        encontradas = listar_fontes()
+        self.fontes = [f for f, _ in encontradas]
+        com_sinal = [f for f, estado in encontradas if estado == "ok"]
+        for fonte in self.fontes:
+            self.rastreadores[fonte] = RastreadorMaos(fonte)
+            self.rastreadores[fonte].start()
+        self.procurando = False
+
+        # Pré-seleção: a escolha salva, se as câmeras ainda existem; senão, as que têm sinal.
+        salvo = carregar_config()
+        por_nome = {f.rotulo: f for f in self.fontes}
+        frontal, lateral = por_nome.get(salvo.get("frontal")), por_nome.get(salvo.get("lateral"))
+        if frontal is None:
+            frontal = com_sinal[0] if com_sinal else None
+            lateral = next((f for f in com_sinal if f != frontal), None)
+        self.escolha = {"frontal": frontal, "lateral": lateral if lateral != frontal else None}
+        if primeira_vez and frontal in com_sinal and salvo.get("frontal") and (
+                salvo.get("lateral") is None or lateral in com_sinal):
+            self.aplicar_cameras()
+
+    def garantir_rastreadores(self):
+        from gestos import RastreadorMaos
+        for fonte in self.fontes:
+            if fonte not in self.rastreadores:
+                self.rastreadores[fonte] = RastreadorMaos(fonte)
+                self.rastreadores[fonte].start()
+
+    def clicar_camera(self, acao, fonte):
+        if acao in ("frontal", "lateral"):
+            outro = "lateral" if acao == "frontal" else "frontal"
+            self.escolha[acao] = None if self.escolha.get(acao) == fonte else fonte
+            if self.escolha.get(outro) == fonte and self.escolha[acao] == fonte:
+                self.escolha[outro] = None
+        elif acao == "procurar":
+            self.procurar_cameras()
+        elif acao == "sem_camera":
+            self.escolha = {}
+            self.aplicar_cameras()
+        elif acao == "confirmar" and self.escolha.get("frontal"):
+            self.aplicar_cameras()
+
+    def aplicar_cameras(self):
+        """Liga as câmeras escolhidas à entrada e desliga as outras (poupa CPU)."""
+        frontal, lateral = self.escolha.get("frontal"), self.escolha.get("lateral")
+        for fonte in list(self.rastreadores):
+            if fonte not in (frontal, lateral):
+                self.rastreadores.pop(fonte).parar()
+        self.entrada.definir_cameras(self.rastreadores.get(frontal), self.rastreadores.get(lateral))
+        salvar_config({"frontal": frontal.rotulo if frontal else None,
+                       "lateral": lateral.rotulo if lateral else None})
+        self.mudar_estado("MENU")
+
+    def iniciar_calibracao(self):
+        self.entrada.reiniciar_calibracao()
+        self.mudar_estado("CALIBRANDO")
+
+    def comecar_partida(self):
+        self.reiniciar()
+        self.mudar_estado("JOGANDO")
 
     def teleportar(self, indice):
         if indice == self.posto and self.transicao is None and abs(self.pos_camera[0]) < 0.01:
@@ -127,13 +226,22 @@ class Jogo:
             pygame.display.flip()
 
     def encerrar(self):
-        if self.rastreador:
-            self.rastreador.parar()
+        for rastreador in self.rastreadores.values():
+            rastreador.parar()
         pygame.quit()
 
     def tratar_evento(self, ev):
         if ev.type == pygame.QUIT:
             return False
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            if self.estado == "CAMERAS":
+                for botao in self.botoes:
+                    if botao.rect.collidepoint(ev.pos):
+                        self.clicar_camera(*botao.acao)
+                        break
+            elif self.estado == "CALIBRANDO" and self.entrada.etapa == 2:
+                self.comecar_partida()
+            return True
         if ev.type != pygame.KEYDOWN:
             return True
         tecla = ev.key
@@ -144,15 +252,28 @@ class Jogo:
         elif tecla == pygame.K_r and self.estado in ("JOGANDO", "PAUSADO", "RESULTADO"):
             self.reiniciar()
             self.mudar_estado("JOGANDO")
+        elif tecla == pygame.K_F11:
+            pygame.display.toggle_fullscreen()
+        elif tecla == pygame.K_v and self.entrada.frontal and self.entrada.lateral:
+            self.entrada.trocar_cameras()
+            if self.estado in ("JOGANDO", "CALIBRANDO"):
+                self.iniciar_calibracao()
+        elif tecla == pygame.K_TAB and self.usar_camera and self.estado in ("MENU", "PAUSADO", "RESULTADO"):
+            self.garantir_rastreadores()
+            self.mudar_estado("CAMERAS")
+        elif tecla in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.estado == "CAMERAS":
+            self.clicar_camera("confirmar", None)
         elif tecla == pygame.K_c:
             self.mostrar_camera = not self.mostrar_camera
         elif tecla == pygame.K_l:
             self.entrada.canhoto = not self.entrada.canhoto
-        elif tecla == pygame.K_k and self.camera_ok and self.estado in ("MENU", "JOGANDO"):
-            self.entrada.reiniciar_calibracao()
-            self.mudar_estado("CALIBRANDO")
+        elif tecla == pygame.K_k and self.camera_ok and self.estado in ("MENU", "JOGANDO", "CALIBRANDO"):
+            self.iniciar_calibracao()
         elif tecla in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.estado == "CALIBRANDO":
-            self.mudar_estado("JOGANDO")
+            if self.entrada.etapa == 2:
+                self.comecar_partida()
+            else:
+                self.entrada.avancar_etapa()
         elif self.estado == "JOGANDO" and tecla in (pygame.K_1, pygame.K_2, pygame.K_3):
             self.teleportar(tecla - pygame.K_1)
         return True
@@ -161,23 +282,30 @@ class Jogo:
 
     def atualizar(self, dt):
         self.hud.atualizar(dt)
-        if self.estado == "MENU":
-            self.cmd = self.entrada.atualizar(dt)
+        if self.estado in ("MENU", "CAMERAS"):
             self.cena.atualizar(self.t_real)
             self.yaw = 0.35 * math.sin(self.t_real * 0.15)
             self.pitch = 0.04
+        if self.estado == "MENU":
+            self.cmd = self.entrada.atualizar(dt)
             if self.cmd.confirmar:
                 if self.camera_ok and not self.entrada.calibrado:
-                    self.entrada.reiniciar_calibracao()
-                    self.mudar_estado("CALIBRANDO")
+                    self.iniciar_calibracao()
                 else:
-                    self.reiniciar()
-                    self.mudar_estado("JOGANDO")
+                    self.comecar_partida()
         elif self.estado == "CALIBRANDO":
             self.cena.atualizar(self.t_real)
-            self.progresso_calibracao = self.entrada.calibrar(dt)
-            if self.entrada.calibrado:
-                self.mudar_estado("JOGANDO")
+            self.entrada.calibrar(dt)
+            if self.entrada.etapa == 2:
+                # Tiro de teste: usa o gesto normal e confirma com o polegar.
+                self.cmd = self.entrada.atualizar(dt)
+                if self.cmd.disparou:
+                    self.entrada.teste_forca = self.cmd.forca_disparo
+                polegar = self.entrada.gesto_polegar(dt)
+                if polegar == "cima":
+                    self.comecar_partida()
+                elif polegar == "baixo":
+                    self.iniciar_calibracao()
         elif self.estado == "JOGANDO":
             self.atualizar_jogo(dt)
         elif self.estado == "RESULTADO":
@@ -276,7 +404,7 @@ class Jogo:
 
         if self.estado in ("JOGANDO", "PAUSADO"):
             pronto = self.restantes > 0 and self.recarga <= 0 and self.transicao is None
-            self.hud.arco(self.tela, forca, pronto, self.t_real)
+            self.desenhar_arco(forca, pronto)
             self.hud.mira(self.tela, foco, puxando, forca, cmd is not None and cmd.fonte == "gesto")
             self.hud.barra_forca(self.tela, forca, puxando)
             self.hud.placar(self.tela, self.pontos, self.recorde, self.restantes, TOTAL_FLECHAS,
@@ -284,13 +412,17 @@ class Jogo:
             self.hud.desenhar_popups(self.tela)
             self.hud.ajuda(self.tela, self.camera_ok)
 
-        if self.rastreador and self.mostrar_camera:
-            self.hud.preview(self.tela, self.rastreador.preview(), self.rastreador, self.entrada)
+        if self.entrada.frontal and self.mostrar_camera and self.estado not in ("CAMERAS", "CALIBRANDO"):
+            self.hud.previews(self.tela, [(self.entrada.frontal, "Frontal"), (self.entrada.lateral, "Lateral")], self.entrada)
 
         if self.estado == "MENU":
-            self.hud.tela_menu(self.tela, self.recorde, self.camera_ok, self.t_real)
+            self.hud.tela_menu(self.tela, self.recorde, (self.camera_ok, self.lateral_ok), self.t_real)
+        elif self.estado == "CAMERAS":
+            self.botoes = telas.tela_cameras(self.tela, self.hud, self.fontes, self.rastreadores, self.escolha,
+                                             self.procurando, self.t_real)
         elif self.estado == "CALIBRANDO":
-            self.hud.tela_calibracao(self.tela, getattr(self, "progresso_calibracao", 0.0), self.entrada.maos_visiveis)
+            forca = self.cmd.forca if self.cmd and self.cmd.puxando and self.entrada.etapa == 2 else 0.0
+            telas.tela_calibracao(self.tela, self.hud, self.entrada, forca, self.t_real)
         elif self.estado == "PAUSADO":
             self.hud.tela_pausa(self.tela)
         elif self.estado == "RESULTADO":
@@ -299,6 +431,17 @@ class Jogo:
 
         fps = self.fonte_fps.render(f"{self.relogio.get_fps():.0f} fps", True, (230, 230, 220))
         self.tela.blit(fps, (LARGURA - fps.get_width() - 8, ALTURA - 20))
+
+    def desenhar_arco(self, forca, carregado):
+        """Arco 3D preso à câmera (mão esquerda à frente), desenhado por cima da cena.
+
+        A flecha fica paralela ao eixo de visão, então converge para o centro da mira.
+        """
+        tremor = 0.004 * math.sin(self.t_real * 31) * max(0.0, forca - 0.85) / 0.15
+        camera_mundo = m3.compor(m3.translacao(*self.pos_camera), m3.orientacao(self.yaw, self.pitch))
+        local = m3.compor(m3.translacao(POSICAO_ARCO[0] + tremor, POSICAO_ARCO[1], POSICAO_ARCO[2]), m3.rot_z(INCLINACAO_ARCO))
+        malha = arco_primeira_pessoa(forca, carregado)
+        self.render.desenhar_lotes(self.tela, [Lote([(malha, camera_mundo @ local, False)])])
 
     def desenhar_rastros(self):
         for f in self.flechas:
@@ -314,9 +457,9 @@ class Jogo:
 def main():
     parser = argparse.ArgumentParser(description="Arrow the Target")
     parser.add_argument("--sem-camera", action="store_true", help="joga só com mouse e teclado")
-    parser.add_argument("--camera", type=int, default=0, help="índice da webcam (padrão 0)")
+    parser.add_argument("--janela", action="store_true", help="abre em janela em vez de tela cheia")
     args = parser.parse_args()
-    Jogo(not args.sem_camera, args.camera).executar()
+    Jogo(usar_camera=not args.sem_camera, tela_cheia=not args.janela).executar()
 
 
 if __name__ == "__main__":

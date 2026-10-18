@@ -79,41 +79,6 @@ class Hud:
         if gesto:
             self.texto(tela, "gesto", self.f_pequena, VERDE, (cx + raio + 16, cy - raio - 10), "midleft")
 
-    def arco(self, tela, forca, carregado, t):
-        """Arco em primeira pessoa no canto inferior, com a corda recuando conforme a força."""
-        base_x, topo, fundo = self.largura * 0.5 - 330, self.altura * 0.52, self.altura + 90
-        tremor = (math.sin(t * 37) * 2.5 * max(0, forca - 0.85) / 0.15) if forca > 0.85 else 0
-        meio_y = (topo + fundo) / 2
-        curva = 70 + 22 * forca
-        pontos = []
-        for i in range(21):
-            u = i / 20
-            y = m3.lerp(topo, fundo, u)
-            x = base_x - curva * math.sin(math.pi * u) + tremor
-            pontos.append((x, y))
-        pygame.draw.lines(tela, (40, 26, 14), False, [(x + 3, y + 3) for x, y in pontos], 14)
-        pygame.draw.lines(tela, MADEIRA, False, pontos, 12)
-        pygame.draw.lines(tela, MADEIRA_CLARA, False, [(x - 3, y) for x, y in pontos], 3)
-        pegada = pygame.Rect(0, 0, 22, 70)
-        pegada.center = (base_x - curva + tremor, meio_y)
-        pygame.draw.rect(tela, (70, 40, 26), pegada, border_radius=6)
-        recuo = 150 * forca
-        nock = (base_x + 60 + recuo + tremor, meio_y + 0.4 * recuo)
-        pygame.draw.line(tela, (230, 224, 200), pontos[0], nock, 2)
-        pygame.draw.line(tela, (230, 224, 200), pontos[-1], nock, 2)
-        if carregado:
-            ponta = (self.largura / 2 - 30, self.altura / 2 + 60)
-            pygame.draw.line(tela, (40, 26, 14), (nock[0] + 2, nock[1] + 2), (ponta[0] + 2, ponta[1] + 2), 7)
-            pygame.draw.line(tela, (196, 150, 96), nock, ponta, 5)
-            d = np.subtract(ponta, nock)
-            d = d / np.linalg.norm(d)
-            n = np.array((-d[1], d[0]))
-            p = np.array(ponta)
-            pygame.draw.polygon(tela, (160, 160, 168), [p + d * 22, p + n * 9, p - n * 9])
-            pena = np.array(nock) + d * 26
-            pygame.draw.polygon(tela, (200, 52, 44), [pena, pena - d * 30 + n * 12, np.array(nock) + n * 8])
-            pygame.draw.polygon(tela, (236, 230, 214), [pena, pena - d * 30 - n * 12, np.array(nock) - n * 8])
-
     def barra_forca(self, tela, forca, puxando):
         if not puxando:
             return
@@ -155,13 +120,15 @@ class Hud:
         self.texto(tela, f"{abs(vento):.1f}", self.f_pequena, OURO, (rect3.right - 12, rect3.centery), "midright")
 
     def ajuda(self, tela, gesto_disponivel):
-        linhas = ["A/D andar   1/2/3 teleporte   P pausa   R reinicia   C câmera   Esc sair"]
+        linhas = ["A/D andar  1/2/3 postos  P pausa  R reinicia  F11 tela cheia  Esc sair"]
         if gesto_disponivel:
-            linhas.insert(0, "Arco: estique uma mão, pince com a outra, afaste e solte  |  L canhoto  K recalibrar")
+            linhas.insert(0, "Esquerda mira, direita fechada puxa, abra para soltar")
+            linhas.insert(1, "L canhoto  K recalibrar  V troca câmeras  C mostra câmeras")
         else:
-            linhas.insert(0, "Mouse: mire e segure o botão para puxar, solte para atirar (ou Espaço)")
+            linhas.insert(0, "Mouse: mire e segure o botão para puxar, solte para atirar")
         for i, linha in enumerate(linhas):
-            self.texto(tela, linha, self.f_pequena, PERGAMINHO, (self.largura // 2, self.altura - 10 - (len(linhas) - 1 - i) * 22), "midbottom")
+            self.texto(tela, linha, self.f_pequena, PERGAMINHO,
+                       (self.largura - 16, self.altura - 26 - (len(linhas) - 1 - i) * 22), "bottomright")
 
     def desenhar_popups(self, tela):
         for p in self.popups:
@@ -174,26 +141,33 @@ class Hud:
                 sup.set_alpha(alfa)
                 tela.blit(sup, sup.get_rect(center=(x + deslocamento, y + deslocamento)))
 
-    def preview(self, tela, quadro, rastreador, entrada):
-        """Imagem da webcam com landmarks no canto inferior esquerdo."""
-        rect = pygame.Rect(16, self.altura - 16 - 192 - 30, 256, 222)
-        self.painel(tela, rect.inflate(8, 8), 190)
-        if quadro is not None:
-            sup = pygame.image.frombuffer(quadro.tobytes(), (quadro.shape[1], quadro.shape[0]), "RGB")
-            tela.blit(sup, (rect.x, rect.y))
-        else:
-            self.texto(tela, rastreador.erro or "Iniciando câmera...", self.f_pequena, PERGAMINHO,
-                       (rect.centerx, rect.y + 96), "center")
-        maos = entrada.maos_visiveis
-        if maos >= 2:
-            estado, cor = ("Puxando" if entrada.pinca else "Arco pronto"), VERDE
-        elif maos == 1:
-            estado, cor = "Mostre as duas mãos", OURO
-        else:
-            estado, cor = "Nenhuma mão", VERMELHO
+    def previews(self, tela, rastreadores, entrada):
+        """Imagens das câmeras (frontal e lateral) com landmarks, no canto inferior esquerdo."""
+        largura, altura = 224, 168
+        x = 16
+        y = self.altura - 16 - altura - 26
+        for rastreador, papel in rastreadores:
+            rect = pygame.Rect(x, y, largura, altura + 26)
+            self.painel(tela, rect.inflate(8, 8), 190)
+            quadro = rastreador.preview() if rastreador else None
+            if quadro is not None:
+                sup = pygame.image.frombuffer(quadro.tobytes(), (quadro.shape[1], quadro.shape[0]), "RGB")
+                tela.blit(pygame.transform.smoothscale(sup, (largura, altura)), (x, y))
+            else:
+                msg = "Sem câmera" if rastreador is None else (rastreador.erro or "Iniciando...")
+                self.texto(tela, msg, self.f_pequena, PERGAMINHO, (rect.centerx, y + altura // 2), "center")
+            maos = entrada.maos_frontal if papel == "Frontal" else entrada.maos_lateral
+            usada = (papel == "Frontal" and entrada.fonte_forca != "lateral") or (papel == "Lateral" and entrada.fonte_forca == "lateral")
+            cor = VERDE if maos >= 2 else (OURO if maos == 1 else VERMELHO)
+            legenda = f"{papel}: {maos} mão" + ("s" if maos != 1 else "")
+            self.texto(tela, legenda, self.f_pequena, cor, (x + 6, rect.bottom - 3), "bottomleft")
+            if usada and entrada.fonte_forca:
+                self.texto(tela, "força", self.f_pequena, OURO, (rect.right - 6, rect.bottom - 3), "bottomright")
+            x += largura + 16
+        estado = "Corda presa (mão fechada)" if entrada.mao_fechada else "Mão direita aberta"
         if entrada.canhoto:
-            estado += " (canhoto)"
-        self.texto(tela, estado, self.f_pequena, cor, (rect.x + 6, rect.bottom - 4), "bottomleft")
+            estado += "  [canhoto]"
+        self.texto(tela, estado, self.f_pequena, VERDE if entrada.mao_fechada else PERGAMINHO, (16, y - 14), "bottomleft")
 
     # ---------------------------------------------------------------- telas
 
@@ -202,46 +176,47 @@ class Hud:
         sombra.fill((10, 8, 4, alfa))
         tela.blit(sombra, (0, 0))
 
-    def tela_menu(self, tela, recorde, camera_ok, t):
+    def tela_menu(self, tela, recorde, cameras, t):
         self.escurecer(tela, 90)
         cx = self.largura // 2
         self.texto(tela, "Arrow the Target", self.f_titulo, OURO, (cx, 150), "center")
         self.texto(tela, "Torneio de arqueiros da clareira", self.f_media, PERGAMINHO, (cx, 215), "center")
-        rect = pygame.Rect(0, 0, 640, 230)
+        rect = pygame.Rect(0, 0, 680, 240)
         rect.center = (cx, 420)
         self.painel(tela, rect)
         linhas = [
             "15 flechas, 3 postos de tiro (15, 25 e 40 m).",
-            "Quanto mais longe o posto, maior o multiplicador.",
-            "Fique de olho no vento e nos alvos que se movem.",
+            "Mão esquerda à frente mira; a direita fechada segura a corda.",
+            "Puxe a direita para trás e abra a mão para soltar a flecha.",
         ]
         for i, l in enumerate(linhas):
             self.texto(tela, l, self.f_pequena, PERGAMINHO, (cx, rect.y + 34 + i * 30), "center")
         pulso = 0.5 + 0.5 * math.sin(t * 3)
         cor = tuple(int(m3.lerp(a, b, pulso)) for a, b in zip(PERGAMINHO, OURO))
-        acao = "Faça uma pinça, clique ou tecle Enter para começar"
-        self.texto(tela, acao, self.f_media, cor, (cx, rect.y + 150), "center")
-        cam = "Câmera: pronta para gestos" if camera_ok else "Câmera indisponível: jogando com mouse e teclado"
-        self.texto(tela, cam, self.f_pequena, VERDE if camera_ok else OURO, (cx, rect.y + 196), "center")
+        self.texto(tela, "Feche a mão direita, clique ou tecle Enter para começar", self.f_media, cor, (cx, rect.y + 150), "center")
+        frontal, lateral = cameras
+        partes = [f"Frontal: {'ok' if frontal else 'indisponível'}", f"Lateral: {'ok' if lateral else 'indisponível'}"]
+        texto = "   |   ".join(partes) + ("" if frontal else "   (jogando com mouse e teclado)")
+        self.texto(tela, texto, self.f_pequena, VERDE if frontal and lateral else OURO, (cx, rect.y + 200), "center")
         self.texto(tela, f"Recorde: {recorde}", self.f_media, OURO, (cx, rect.bottom + 40), "center")
+        self.texto(tela, "Tab: escolher câmeras   ·   K: calibrar de novo   ·   Esc: sair", self.f_pequena,
+                   (200, 186, 160), (cx, rect.bottom + 84), "center")
 
-    def tela_calibracao(self, tela, progresso, maos):
+    def tela_calibracao(self, tela, etapa, progresso, entrada):
+        from entrada import ETAPAS_CALIBRACAO
         self.escurecer(tela, 110)
-        cx, cy = self.largura // 2, self.altura // 2 - 40
-        self.texto(tela, "Calibrando o arco", self.f_grande, OURO, (cx, cy - 120), "center")
-        instrucoes = [
-            "Estique a mão do arco para a frente, na altura do peito.",
-            "Com a outra mão, faça a pinça (polegar + indicador) encostada nela.",
-            "Fique parado até a barra encher.  Enter pula a calibração.",
-        ]
-        for i, l in enumerate(instrucoes):
+        cx, cy = self.largura // 2, self.altura // 2 - 60
+        titulo, instrucoes = ETAPAS_CALIBRACAO[etapa]
+        self.texto(tela, f"Calibração {etapa + 1}/2: {titulo}", self.f_grande, OURO, (cx, cy - 120), "center")
+        for i, l in enumerate(instrucoes + ["Fique parado até a barra encher.  Enter pula esta etapa."]):
             self.texto(tela, l, self.f_pequena, PERGAMINHO, (cx, cy - 60 + i * 28), "center")
         rect = pygame.Rect(0, 0, 420, 26)
         rect.center = (cx, cy + 60)
         self.painel(tela, rect.inflate(10, 10))
         pygame.draw.rect(tela, VERDE, (rect.x, rect.y, int(rect.w * progresso), rect.h), border_radius=6)
-        aviso = "Duas mãos detectadas" if maos >= 2 else f"Mãos detectadas: {maos}"
-        self.texto(tela, aviso, self.f_pequena, VERDE if maos >= 2 else OURO, (cx, cy + 100), "center")
+        f, l = entrada.maos_frontal, entrada.maos_lateral
+        aviso = f"Mãos na câmera frontal: {f}   |   lateral: {l}"
+        self.texto(tela, aviso, self.f_pequena, VERDE if f >= 2 or l >= 2 else OURO, (cx, cy + 100), "center")
 
     def tela_pausa(self, tela):
         self.escurecer(tela, 140)

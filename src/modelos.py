@@ -285,6 +285,50 @@ def flecha():
     )
 
 
+COURO = (92, 56, 34)
+LUVA = (120, 82, 54)
+CORDA_ARCO = (232, 226, 206)
+ARCO_MEIA_ALTURA = 0.72
+ARCO_CURVA = 0.14  # quanto as pontas recuam em direção ao arqueiro (distância empunhadura-corda)
+PUXADA_MAX = 0.36
+
+
+def arco_primeira_pessoa(forca, carregado):
+    """Arco visto pelo arqueiro, em coordenadas da empunhadura (mão esquerda).
+
+    y para cima, z para o alvo. As pontas das lâminas recuam em direção ao arqueiro (-z)
+    e a corda fica atrás da empunhadura; puxar leva o ponto de encaixe para trás.
+    """
+    curva = ARCO_CURVA + 0.07 * forca
+    partes = []
+    n = 6
+    for sinal in (1, -1):
+        anterior = None
+        for i in range(n + 1):
+            s = i / n
+            p = (0.0, sinal * (0.07 + (ARCO_MEIA_ALTURA - 0.07) * s), -curva * s * s)
+            if anterior is not None:
+                espessura = 0.032 - 0.014 * s
+                partes.append(tabua(anterior, p, espessura, espessura * 0.8, MADEIRA if i % 2 else MADEIRA_CLARA))
+            anterior = p
+    ponta_sup = (0.0, ARCO_MEIA_ALTURA, -curva)
+    ponta_inf = (0.0, -ARCO_MEIA_ALTURA, -curva)
+    encaixe = (0.0, 0.0, -curva - PUXADA_MAX * forca)
+    partes += [
+        tabua(ponta_sup, encaixe, 0.004, 0.004, CORDA_ARCO),
+        tabua(ponta_inf, encaixe, 0.004, 0.004, CORDA_ARCO),
+        caixa(0.05, 0.16, 0.05, COURO),                       # empunhadura
+        caixa(0.085, 0.11, 0.085, LUVA, centro=(-0.01, -0.02, -0.01)),  # mão esquerda
+    ]
+    if carregado:
+        # Flecha mais fina que a do mundo: aqui ela fica a poucos centímetros dos olhos.
+        haste = flecha().transformada(m3.compor(m3.translacao(0.028, 0.012, encaixe[2] + 0.40), m3.escala(0.45, 0.45, 1.0)))
+        partes.append(haste)
+    if carregado or forca > 0:
+        partes.append(caixa(0.05, 0.065, 0.055, LUVA, centro=(0.03, -0.03, encaixe[2] - 0.03)))  # mão direita
+    return juntar(*partes)
+
+
 def morro(rng, raio, altura, cor):
     return cone(7, raio, altura, cor).transformada(m3.rot_y(rng.uniform(0, 6.28)))
 
