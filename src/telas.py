@@ -5,7 +5,7 @@ import pygame
 
 import mat3d as m3
 from entrada import ETAPAS_CALIBRACAO
-from hud import OURO, PERGAMINHO, VERDE, VERMELHO
+from hud import OURO, PERGAMINHO, VERDE, VERMELHO, desenhar_maos, desenhar_puxada, status_camera
 
 TINTA = (66, 44, 28)
 TINTA_CLARA = (120, 88, 58)
@@ -205,6 +205,14 @@ def tela_calibracao(tela, hud, entrada, forca, t):
         sup = _preview_superficie(rastreador, caixa.size)
         if sup:
             tela.blit(sup, caixa)
+            chave = papel.lower()
+            desenhar_puxada(tela, caixa, entrada.pares[chave], entrada.rastros[chave], forca, forca > 0,
+                            entrada.mao_fechada, hud.f_pequena)
+            maos = entrada.maos_camera.get(chave, [])
+            desenhar_maos(tela, caixa, maos, entrada.pares[chave], forca, forca > 0, hud.f_pequena)
+            _, aviso = status_camera(rastreador, maos, entrada.pares[chave], forca, forca > 0, entrada.mao_fechada)
+            if aviso:
+                hud.texto(tela, aviso, hud.f_pequena, VERMELHO, (caixa.x + 8, caixa.bottom - 26))
         else:
             msg = "sem câmera lateral" if rastreador is None else (rastreador.erro or "iniciando...")
             hud.texto(tela, msg, hud.f_pequena, PERGAMINHO, caixa.center, "center")
@@ -272,6 +280,7 @@ def tela_cameras(tela, hud, fontes, rastreadores, escolha, procurando, t):
         sup = _preview_superficie(rastreador, prev.size)
         if sup:
             tela.blit(sup, prev)
+            desenhar_maos(tela, prev, rastreador.leitura().maos, (None, None))
             if rastreador.transmitindo:
                 maos = len(rastreador.leitura().maos)
                 status, cor = f"Com sinal · {maos} mão" + ("s" if maos != 1 else ""), VERDE
@@ -311,4 +320,80 @@ def tela_cameras(tela, hud, fontes, rastreadores, escolha, procurando, t):
         botoes.append(b)
     hud.texto(tela, "Câmeras virtuais (DroidCam, OBS) só têm sinal com o aplicativo transmitindo.  Enter confirma.",
               hud.f_pequena, (170, 156, 130), (cx, hud.altura - 30), "center")
+    return botoes
+
+
+# ---------------------------------------------------------------- menu
+
+def tela_menu(tela, hud, nome, editando, modo, modos, ranking, calibrado, cameras, t, tutorial_visto=True):
+    """Menu com nome do arqueiro, modos de jogo e placar. Devolve os botões clicáveis."""
+    hud.escurecer(tela, 110)
+    cx = hud.largura // 2
+    mouse = pygame.mouse.get_pos()
+    botoes = []
+    hud.texto(tela, "Arrow the Target", hud.f_titulo, OURO, (cx, 78), "center")
+    hud.texto(tela, "Torneio de arqueiros da clareira", hud.f_media, PERGAMINHO, (cx, 134), "center")
+
+    esquerda = pygame.Rect(150, 170, 480, 486)
+    hud.painel(tela, esquerda, 200)
+    hud.texto(tela, "Arqueiro", hud.f_pequena, OURO, (esquerda.x + 20, esquerda.y + 14))
+    caixa = pygame.Rect(esquerda.x + 20, esquerda.y + 40, esquerda.w - 40, 44)
+    pygame.draw.rect(tela, (30, 22, 14), caixa, border_radius=8)
+    pygame.draw.rect(tela, OURO if editando else (150, 120, 80), caixa, 2, border_radius=8)
+    cursor = "|" if editando and int(t * 2) % 2 == 0 else ""
+    hud.texto(tela, (nome or "") + cursor, hud.f_media, PERGAMINHO, (caixa.x + 12, caixa.centery), "midleft")
+    dica = "digite e tecle Enter" if editando else ("calibração salva" if calibrado else "clique para mudar (N)")
+    hud.texto(tela, dica, hud.f_pequena, (190, 175, 150), (caixa.right - 10, caixa.centery), "midright", sombra=False)
+    botoes.append(Botao(caixa, "", ("nome", None)))
+
+    hud.texto(tela, "Modo de jogo  (setas esquerda/direita)", hud.f_pequena, OURO, (esquerda.x + 20, esquerda.y + 100))
+    y = esquerda.y + 126
+    for chave, info in modos.items():
+        rect = pygame.Rect(esquerda.x + 20, y, esquerda.w - 40, 56)
+        ativo = chave == modo
+        sobre = rect.collidepoint(mouse)
+        pygame.draw.rect(tela, (150, 106, 50) if ativo else ((96, 66, 40) if sobre else (64, 44, 28)), rect, border_radius=8)
+        pygame.draw.rect(tela, OURO if ativo or sobre else (150, 120, 80), rect, 2, border_radius=8)
+        hud.texto(tela, info["nome"], hud.f_media, PERGAMINHO, (rect.x + 14, rect.y + 4))
+        hud.texto(tela, info["descricao"], hud.f_pequena, (225, 210, 180), (rect.x + 14, rect.y + 33), sombra=False)
+        botoes.append(Botao(rect, "", ("modo", chave)))
+        y += 62
+
+    tutorial = Botao(pygame.Rect(esquerda.x + 20, esquerda.bottom - 128, esquerda.w - 40, 44),
+                     "Como jogar (tutorial)  ·  T", ("tutorial", None), ativo=not tutorial_visto)
+    tutorial.desenhar(tela, hud, mouse)
+    botoes.append(tutorial)
+    jogar = Botao(pygame.Rect(esquerda.x + 20, esquerda.bottom - 70, esquerda.w - 40, 52), "", ("jogar", None), ativo=True)
+    jogar.desenhar(tela, hud, mouse)
+    pulso = 0.5 + 0.5 * math.sin(t * 3)
+    cor = tuple(int(m3.lerp(a, b, pulso)) for a, b in zip(PERGAMINHO, OURO))
+    hud.texto(tela, "Jogar  (Enter, clique ou feche a mão direita)", hud.f_pequena, cor, jogar.rect.center, "center")
+    botoes.append(jogar)
+
+    direita = pygame.Rect(660, 170, 470, 486)
+    hud.painel(tela, direita, 200)
+    titulo = f"Melhores · {modos[modo]['nome']}"
+    hud.texto(tela, titulo, hud.f_media, OURO, (direita.x + 20, direita.y + 12))
+    if not modos[modo].get("placar", True):
+        hud.texto(tela, "O treino livre não entra no placar.", hud.f_pequena, PERGAMINHO, (direita.x + 20, direita.y + 60))
+    elif not ranking:
+        hud.texto(tela, "Ninguém pontuou ainda. Seja o primeiro!", hud.f_pequena, PERGAMINHO, (direita.x + 20, direita.y + 60))
+    for i, item in enumerate(ranking[:5]):
+        yy = direita.y + 60 + i * 36
+        cor = OURO if i == 0 else PERGAMINHO
+        hud.texto(tela, f"{i + 1}.", hud.f_media, cor, (direita.x + 24, yy))
+        hud.texto(tela, str(item.get("nome", "?"))[:16], hud.f_media, cor, (direita.x + 64, yy))
+        hud.texto(tela, f"{item.get('pontos', 0)}", hud.f_media, cor, (direita.right - 24, yy), "topright")
+
+    frontal, lateral = cameras
+    linhas = [("Câmera frontal: " + ("pronta" if frontal else "indisponível"), frontal),
+              ("Câmera lateral: " + ("pronta" if lateral else "indisponível"), lateral)]
+    for i, (texto, ok) in enumerate(linhas):
+        _marca(tela, (direita.x + 32, direita.bottom - 70 + i * 30 + 10), bool(ok))
+        hud.texto(tela, texto, hud.f_pequena, VERDE if ok else PERGAMINHO, (direita.x + 52, direita.bottom - 70 + i * 30))
+    if not frontal:
+        hud.texto(tela, "Sem câmera: jogue com mouse e teclado.", hud.f_pequena, OURO, (direita.x + 20, direita.bottom - 104))
+
+    hud.texto(tela, "Tab: câmeras  ·  K: calibrar  ·  N: nome  ·  setas: modo  ·  F11: tela cheia  ·  Esc: sair",
+              hud.f_pequena, (200, 186, 160), (cx, hud.altura - 30), "center")
     return botoes

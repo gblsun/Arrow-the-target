@@ -102,6 +102,19 @@ def recortar_near(poligono, near):
     return saida
 
 
+def sombra_planar(luz, altura=0.02):
+    """Projeta pontos no plano y = altura ao longo da direção da luz (sombra projetada).
+
+    P' = P - L * (P.y / L.y): cada ponto desliza pelo raio de luz até tocar o chão.
+    """
+    lx, ly, lz = luz
+    m = np.array([[1, -lx / ly, 0, 0],
+                  [0, 0, 0, altura],
+                  [0, -lz / ly, 1, 0],
+                  [0, 0, 0, 1]], dtype=float)
+    return m
+
+
 # ---------------------------------------------------------------- interpolação (aula 10)
 
 def lerp(a, b, u):

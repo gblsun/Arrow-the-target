@@ -43,6 +43,14 @@ def testar():
     recortado = m3.recortar_near(tri, 0.5)
     assert len(recortado) == 4 and all(q[2] >= 0.5 - 1e-9 for q in recortado)
 
+    # Sombra planar: o ponto cai no plano do chão, deslizando ao longo da direção da luz.
+    luz = np.array((-0.45, 0.8, -0.35))
+    luz /= np.linalg.norm(luz)
+    ponto = np.array((2.0, 3.0, 5.0))
+    sombra = m3.aplicar_ponto(m3.sombra_planar(luz, 0.02), ponto)
+    assert perto(sombra[1], 0.02)
+    assert perto(np.cross(ponto - sombra, luz), 0, tol=0.03)
+
     # Interpolação e easing preservam os extremos.
     for f in (m3.ease_in, m3.ease_out, m3.ease_in_out):
         assert perto(f(0.0), 0) and perto(f(1.0), 1)

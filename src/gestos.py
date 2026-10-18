@@ -8,7 +8,16 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+import numpy as np
+
 LARGURA_PREVIEW, ALTURA_PREVIEW = 320, 240
+LARGURA_DETECCAO = 480
+BRILHO_MINIMO = 90  # abaixo disso a imagem é realçada (CLAHE) antes da detecção
+LIMITE_DETECCAO_MS = 45  # acima disso o modelo mais preciso dá lugar ao mais leve
+
+# Ligações entre os 21 landmarks da mão (mesmo desenho do MediaPipe), para o esqueleto da interface.
+CONEXOES = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10), (10, 11),
+            (11, 12), (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (17, 18), (18, 19), (19, 20), (0, 17)]
 
 
 def distancia(a, b):
@@ -20,6 +29,7 @@ def distancia(a, b):
 class Mao:
     pontos: list  # 21 landmarks (x, y) normalizados, imagem já espelhada
     lado: str = ""  # "Left"/"Right" do MediaPipe: com a imagem espelhada, é a mão real do usuário
+    confianca: float = 1.0  # score da lateralidade
 
     @property
     def tamanho(self):
@@ -39,6 +49,27 @@ class Mao:
         return sum(distancia(self.pontos[i], self.pontos[0]) for i in (8, 12, 16, 20)) / 4 / self.tamanho
 
     @property
+    def estendidos(self):
+        """Indicador, médio, anelar e mínimo: True se estendido.
+
+        Usa distância ao pulso (ponta mais longe que a articulação PIP), o que funciona
+        mesmo com a mão inclinada — ao contrário de comparar só o eixo y.
+        """
+        p = self.pontos
+        return [distancia(p[ponta], p[0]) > 1.15 * distancia(p[pip], p[0])
+                for ponta, pip in ((8, 6), (12, 10), (16, 14), (20, 18))]
+
+    @property
+    def dedos(self):
+        """1, 2 ou 3 quando os dedos estendidos são contíguos a partir do indicador
+        (e o mínimo está dobrado); 0 caso contrário (punho, mão aberta ou contagem ambígua)."""
+        estendidos = self.estendidos
+        n = sum(estendidos)
+        if 1 <= n <= 3 and estendidos == [True] * n + [False] * (4 - n):
+            return n
+        return 0
+
+    @property
     def abertura_pinca(self):
         return distancia(self.pontos[4], self.pontos[8]) / self.tamanho
 
@@ -55,6 +86,93 @@ class Mao:
         if diferenca > 0.25 and lm[4][1] > lm[17][1] + 0.3 * self.tamanho:
             return "baixo"
         return None
+
+
+def mao_sintetica(cx, cy, tamanho=0.12, fechada=False, dedos=None, lado="", inclinacao=0.0):
+    """Mão vertical gerada por código (tutorial e testes).
+
+    `dedos` = quantos dedos a partir do indicador ficam estendidos (sobrepõe `fechada`).
+    `inclinacao` gira a mão em torno do pulso (rad).
+    """
+    s = tamanho
+    p = [(cx, cy)] * 21
+    p[0] = (cx, cy + s)
+    p[9] = (cx, cy)
+    for k, (base, pip, dip, ponta) in enumerate(((5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20))):
+        estendido = (k < dedos) if dedos is not None else not fechada
+        dx = (k - 1.5) * 0.22 * s
+        p[base] = (cx + dx, cy + 0.05 * s)
+        if estendido:
+            p[pip], p[dip], p[ponta] = (cx + dx * 1.1, cy - 0.3 * s), (cx + dx * 1.15, cy - 0.55 * s), (cx + dx * 1.2, cy - 0.8 * s)
+        else:
+            p[pip], p[dip], p[ponta] = (cx + dx, cy - 0.15 * s), (cx + dx * 0.9, cy + 0.15 * s), (cx + dx * 0.8, cy + 0.45 * s)
+    p[9] = (cx, cy)
+    polegar_aberto = dedos is None and not fechada
+    p[1] = (cx + 0.3 * s, cy + 0.8 * s)
+    p[2] = (cx + 0.45 * s, cy + 0.55 * s)
+    p[3] = (cx + (0.6 if polegar_aberto else 0.4) * s, cy + 0.35 * s)
+    p[4] = (cx + (0.75 if polegar_aberto else 0.3) * s, cy + (0.15 if polegar_aberto else 0.2) * s)
+    if inclinacao:
+        c, sn = math.cos(inclinacao), math.sin(inclinacao)
+        px, py = p[0]
+        p = [(px + c * (x - px) - sn * (y - py), py + sn * (x - px) + c * (y - py)) for x, y in p]
+    return Mao(p, lado)
+
+
+class FiltroOneEuro:
+    """Filtro One Euro (Casiez et al., 2012) para arrays: suaviza muito parado e pouco em movimento.
+
+    Coordenadas normalizadas, então `beta` é grande (velocidades típicas ~0,5-2 por segundo).
+    """
+
+    def __init__(self, min_cutoff=1.2, beta=8.0, d_cutoff=1.0):
+        self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
+        self.x = self.dx = None
+        self.t = 0.0
+
+    @staticmethod
+    def _alfa(cutoff, dt):
+        tau = 1.0 / (2 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / dt)
+
+    def filtrar(self, x, t):
+        x = np.asarray(x, dtype=float)
+        if self.x is None:
+            self.x, self.dx, self.t = x, np.zeros_like(x), t
+            return x
+        dt = max(t - self.t, 1e-3)
+        self.t = t
+        a_d = self._alfa(self.d_cutoff, dt)
+        self.dx = a_d * (x - self.x) / dt + (1 - a_d) * self.dx
+        cutoff = self.min_cutoff + self.beta * np.abs(self.dx)
+        a = 1.0 / (1.0 + (1.0 / (2 * math.pi * cutoff)) / dt)
+        self.x = a * x + (1 - a) * self.x
+        return self.x
+
+
+class SuavizadorMaos:
+    """Um filtro One Euro por mão, associando as mãos entre quadros pelo pulso mais próximo."""
+
+    def __init__(self, distancia_maxima=0.15, validade=0.5):
+        self.distancia_maxima, self.validade = distancia_maxima, validade
+        self._slots = []  # [filtro, pulso, instante]
+
+    def suavizar(self, maos, t):
+        self._slots = [slot for slot in self._slots if t - slot[2] < self.validade]
+        livres = list(self._slots)
+        resultado = []
+        for mao in maos:
+            pulso = mao.pontos[0]
+            slot = min(livres, key=lambda sl: distancia(sl[1], pulso), default=None)
+            if slot is None or distancia(slot[1], pulso) > self.distancia_maxima:
+                slot = [FiltroOneEuro(), pulso, t]
+                self._slots.append(slot)
+            else:
+                livres.remove(slot)
+            filtrados = slot[0].filtrar(mao.pontos, t)
+            slot[1], slot[2] = pulso, t
+            resultado.append(Mao([tuple(p) for p in filtrados.tolist()], mao.lado, mao.confianca))
+        return resultado
 
 
 @dataclass
@@ -196,6 +314,12 @@ class RastreadorMaos(threading.Thread):
         self.ativo = False
         self.erro = None
         self.transmitindo = False  # False enquanto a câmera virtual mostra a tela de espera
+        # Métricas para a interface.
+        self.fps = 0.0
+        self.brilho = 128.0
+        self.realce = False  # CLAHE ligado por pouca luz
+        self.complexidade = 1
+        self.tempo_deteccao = 0.0  # ms (média móvel)
         self._parar = threading.Event()
 
     @property
@@ -228,12 +352,19 @@ class RastreadorMaos(threading.Thread):
             return cam
 
         mp_maos = mp.solutions.hands
-        desenho = mp.solutions.drawing_utils
+
+        def criar_detector(complexidade):
+            return mp_maos.Hands(max_num_hands=2, model_complexity=complexidade,
+                                 min_detection_confidence=0.6, min_tracking_confidence=0.5)
+
         contador = 0
         camera = None
         falhas = 0
-        with mp_maos.Hands(max_num_hands=2, model_complexity=0,
-                           min_detection_confidence=0.6, min_tracking_confidence=0.5) as detector:
+        suavizador = SuavizadorMaos()
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        ultimo_quadro = None
+        detector = criar_detector(self.complexidade)
+        try:
             while not self._parar.is_set():
                 # (Re)conexão: a webcam pode não existir ainda, ser desconectada ou tomada por outro app.
                 if camera is None or not camera.isOpened():
@@ -259,26 +390,53 @@ class RastreadorMaos(threading.Thread):
                         time.sleep(0.02)
                     continue
                 falhas = 0
+                agora = time.monotonic()
+                if ultimo_quadro is not None:
+                    self.fps = 0.9 * self.fps + 0.1 / max(agora - ultimo_quadro, 1e-3)
+                ultimo_quadro = agora
                 if contador % 15 == 0:
                     self.transmitindo = not tela_de_espera(imagem)
                 imagem = cv2.flip(imagem, 1)  # modo espelho
+                # Detecta numa imagem menor: os landmarks são normalizados, então a escala não muda nada.
+                altura, largura = imagem.shape[:2]
+                if largura > LARGURA_DETECCAO:
+                    imagem = cv2.resize(imagem, (LARGURA_DETECCAO, int(altura * LARGURA_DETECCAO / largura)))
+                # Pouca luz: realça o contraste local da luminância (CLAHE) antes de detectar.
+                if contador % 10 == 0:
+                    self.brilho = float(cv2.cvtColor(cv2.resize(imagem, (64, 48)), cv2.COLOR_BGR2GRAY).mean())
+                    self.realce = self.brilho < BRILHO_MINIMO
+                if self.realce:
+                    lab = cv2.cvtColor(imagem, cv2.COLOR_BGR2LAB)
+                    lab[..., 0] = clahe.apply(lab[..., 0])
+                    imagem = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
                 rgb = cv2.cvtColor(imagem, cv2.COLOR_BGR2RGB)
+                inicio = time.perf_counter()
                 resultado = detector.process(rgb)
+                gasto = (time.perf_counter() - inicio) * 1000
+                self.tempo_deteccao = gasto if contador == 0 else 0.9 * self.tempo_deteccao + 0.1 * gasto
+                # Modelo adaptativo: se o preciso estiver lento demais nesta máquina, usa o leve.
+                if self.complexidade == 1 and contador > 30 and self.tempo_deteccao > LIMITE_DETECCAO_MS:
+                    detector.close()
+                    self.complexidade = 0
+                    detector = criar_detector(0)
                 maos = []
                 if resultado.multi_hand_landmarks:
                     lados = resultado.multi_handedness or []
                     for i, hand in enumerate(resultado.multi_hand_landmarks):
-                        lado = lados[i].classification[0].label if i < len(lados) else ""
-                        maos.append(Mao([(lm.x, lm.y) for lm in hand.landmark], lado))
-                        desenho.draw_landmarks(rgb, hand, mp_maos.HAND_CONNECTIONS)
+                        classe = lados[i].classification[0] if i < len(lados) else None
+                        maos.append(Mao([(lm.x, lm.y) for lm in hand.landmark],
+                                        classe.label if classe else "", classe.score if classe else 1.0))
+                maos = suavizador.suavizar(maos, agora)
                 preview = cv2.resize(rgb, (LARGURA_PREVIEW, ALTURA_PREVIEW))
                 contador += 1
                 with self._trava:
-                    self._leitura = Leitura(contador, maos, time.monotonic())
+                    self._leitura = Leitura(contador, maos, agora)
                     self._preview = preview
-        if camera is not None:
-            camera.release()
-        self.ativo = False
+        finally:
+            detector.close()
+            if camera is not None:
+                camera.release()
+            self.ativo = False
 
     def leitura(self):
         with self._trava:

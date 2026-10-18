@@ -4,6 +4,7 @@ Cada primitiva sai com as faces orientadas para fora (normal apontando para long
 centróide da primitiva), o que permite descartar faces de costas no renderizador.
 """
 import math
+from functools import lru_cache
 
 import numpy as np
 
@@ -182,6 +183,68 @@ def arvore_copa(rng):
     return juntar(tronco, copa), altura
 
 
+def pinheiro_simples(rng):
+    """Versão de poucos polígonos para árvores distantes (nível de detalhe)."""
+    altura = rng.uniform(5.5, 9.0)
+    cor = PINHEIRO[rng.integers(len(PINHEIRO))]
+    return juntar(prisma(4, 0.25, altura * 0.3, TRONCO, tampas=False),
+                  cone(5, altura * 0.3, altura * 0.8, cor, y0=altura * 0.25)), altura
+
+
+def copa_simples(rng):
+    altura = rng.uniform(4.0, 6.5)
+    raio = rng.uniform(1.6, 2.4)
+    copa = esfera(5, 3, raio, [FOLHAGEM[rng.integers(3)]]).transformada(
+        m3.compor(m3.translacao(0, altura - raio * 0.6, 0), m3.escala(1.0, 0.85, 1.0)))
+    return juntar(prisma(4, 0.25, altura - raio * 0.8, TRONCO, tampas=False), copa), altura
+
+
+BETULA = (226, 222, 210)
+
+
+def betula(rng):
+    """Bétula: tronco claro e fino, copa pequena e alongada."""
+    altura = rng.uniform(5.0, 7.5)
+    tronco = prisma(5, 0.13, altura * 0.85, BETULA, raio_topo=0.08, tampas=False)
+    faixas = [prisma(5, 0.135, 0.08, (60, 56, 50), y0=y, tampas=False) for y in np.linspace(0.6, altura * 0.7, 5)]
+    copa = esfera(5, 4, 1.0, [(120, 150, 64), (136, 164, 72)]).transformada(
+        m3.compor(m3.translacao(0, altura * 0.8, 0), m3.escala(1.1, 1.7, 1.1)))
+    return juntar(tronco, *faixas, copa), altura
+
+
+def arbusto(rng):
+    s = rng.uniform(0.6, 1.3)
+    tons = [FOLHAGEM[(i + rng.integers(3)) % 3] for i in range(2)]
+    return esfera(5, 3, 1.0, tons).transformada(
+        m3.compor(m3.translacao(0, s * 0.45, 0), m3.rot_y(rng.uniform(0, 6.28)), m3.escala(s * 1.3, s * 0.75, s)))
+
+
+def tufo_grama(rng):
+    """Tufo de folhas finas (três cones achatados)."""
+    cor = (96, 138, 58) if rng.random() < 0.5 else (112, 148, 64)
+    folhas = []
+    for k in range(3):
+        a = k * 2.1 + rng.uniform(0, 0.5)
+        folhas.append(cone(3, 0.07, rng.uniform(0.35, 0.6), cor).transformada(
+            m3.compor(m3.translacao(0.08 * math.cos(a), 0, 0.08 * math.sin(a)), m3.rot_z(0.25 * math.cos(a)), m3.rot_x(0.25 * math.sin(a)))))
+    return juntar(*folhas)
+
+
+FLORES = [(236, 210, 80), (232, 120, 150), (240, 240, 236), (170, 120, 210)]
+
+
+def flores(rng):
+    """Moita de flores: dois caules finos com corola colorida (poucos polígonos)."""
+    cor = FLORES[rng.integers(len(FLORES))]
+    partes = []
+    for _ in range(2):
+        x, z = rng.uniform(-0.25, 0.25, 2)
+        h = rng.uniform(0.2, 0.35)
+        partes.append(cone(3, 0.02, h, (80, 120, 50)).transformada(m3.translacao(x, 0, z)))
+        partes.append(caixa(0.1, 0.05, 0.1, cor, centro=(x, h, z)))
+    return juntar(*partes)
+
+
 def pedra(rng):
     s = rng.uniform(0.4, 1.1)
     return esfera(5, 3, 1.0, [PEDRA, (116, 114, 106)]).transformada(
@@ -228,12 +291,15 @@ def estandarte(cor, altura=4.5):
     return juntar(pano, faixa)
 
 
-def alvo(raio=1.0, com_cavalete=True):
+ANEIS_BONUS = [(250, 236, 180), (196, 140, 30), (240, 196, 60), (255, 226, 120), (255, 250, 220)]
+
+
+def alvo(raio=1.0, com_cavalete=True, cores=None):
     """Alvo de palha com anéis coloridos. Origem no centro dos anéis; frente voltada para -z."""
     k = raio
     partes = [prisma(14, 1.08 * k, 0.32 * k, PALHA).transformada(m3.compor(m3.translacao(0, 0, 0.0), m3.rot_x(math.pi / 2)))]
     # Anéis como discos planos à frente da palha: o menor fica mais à frente (vies maior).
-    for i, (r, cor) in enumerate(zip(RAIOS_ANEIS, ANEIS)):
+    for i, (r, cor) in enumerate(zip(RAIOS_ANEIS, cores or ANEIS)):
         partes.append(disco_frontal(16, r * k, -0.005 - 0.004 * i, cor, vies=0.01 * (i + 1)))
     if com_cavalete:
         partes += [
@@ -294,6 +360,12 @@ PUXADA_MAX = 0.36
 
 
 def arco_primeira_pessoa(forca, carregado):
+    """Versão em cache: a força é arredondada em passos de 2% (no máximo ~100 malhas distintas)."""
+    return _arco_primeira_pessoa(round(m3.limitar(forca) * 50) / 50, bool(carregado))
+
+
+@lru_cache(maxsize=128)
+def _arco_primeira_pessoa(forca, carregado):
     """Arco visto pelo arqueiro, em coordenadas da empunhadura (mão esquerda).
 
     y para cima, z para o alvo. As pontas das lâminas recuam em direção ao arqueiro (-z)

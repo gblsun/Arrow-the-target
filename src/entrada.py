@@ -5,6 +5,7 @@ Papéis das mãos (destro; a tecla L inverte):
 - mão direita, atrás: fechada segura a corda; a distância até a mão do arco é a força
   (medida de preferência pela câmera lateral); abrir a mão solta a flecha.
 """
+import math
 import time
 from collections import deque
 from statistics import median
@@ -27,6 +28,9 @@ TEMPO_ETAPA = 2.0  # tempo parado na pose para concluir a etapa
 ESTABILIDADE = 0.03  # deslocamento máximo das palmas entre quadros para contar como "parado"
 AMPLITUDE_MINIMA = 0.05  # diferença mínima entre repouso e puxada (fração da imagem)
 TEMPO_POLEGAR = 0.7
+TEMPO_DEDOS = 0.8  # tempo segurando 1, 2 ou 3 dedos (qualquer mão) para trocar de posto
+TOLERANCIA_PERDA = 0.25  # mão da corda pode sumir por esse tempo sem cancelar a puxada (s)
+TAMANHO_RASTRO = 15
 TEMPO_PUXADA_MOUSE = 1.1
 
 ETAPAS_CALIBRACAO = [
@@ -54,6 +58,28 @@ class Comando:
     forca_disparo: float = 0.0
     confirmar: bool = False
     fonte: str = "mouse"
+    posto: int = 0  # 1-3 quando a mão esquerda mostrou os dedos por TEMPO_DEDOS
+
+
+class FiltroKalman1D:
+    """Kalman de estado único (valor constante + ruído): suaviza a força sem atraso excessivo.
+
+    q = quanto o valor real pode variar por passo; r = ruído da medida.
+    """
+
+    def __init__(self, q=0.02, r=0.04):
+        self.q, self.r = q, r
+        self.reiniciar()
+
+    def reiniciar(self, valor=0.0):
+        self.x, self.p = valor, 1.0
+
+    def atualizar(self, medida):
+        self.p += self.q
+        ganho = self.p / (self.p + self.r)
+        self.x += ganho * (medida - self.x)
+        self.p *= 1 - ganho
+        return self.x
 
 
 @dataclass
@@ -77,6 +103,20 @@ class Entrada:
         self.reiniciar_calibracao()
 
         self._mira_gesto = (0.0, 0.0)
+        self.inclinacao = 0.0  # rotação da mão do arco (rad), usada para inclinar o arco
+        self._filtro_forca = FiltroKalman1D()
+        self._corda_lateral_anterior = None
+        # Troca de posto pelos dedos da mão do arco.
+        self.dedos_atual = 0
+        self._maos_frontais = []
+        self._ultima_corda = 0.0
+        self.progresso_dedos = 0.0
+        self._dedos_desde = 0.0
+        self._dedos_usado = False
+        # Últimas mãos identificadas e rastro da mão da corda, por câmera (para as prévias).
+        self.pares = {"frontal": (None, None), "lateral": (None, None)}
+        self.maos_camera = {"frontal": [], "lateral": []}
+        self.rastros = {"frontal": deque(maxlen=TAMANHO_RASTRO), "lateral": deque(maxlen=TAMANHO_RASTRO)}
         self._fechada = False
         self._puxando_gesto = False
         self._forca_gesto = 0.0
@@ -148,18 +188,41 @@ class Entrada:
         return (arco[0] if arco else None), (corda[0] if corda else None)
 
     def _papeis_lateral(self, maos):
-        """De perfil a lateralidade é pouco confiável: usa a posição calibrada em x."""
+        """De perfil a lateralidade é pouco confiável: usa a posição calibrada em x e,
+        quadro a quadro, a continuidade (a mão da corda é a mais próxima de onde ela estava)."""
         if len(maos) < 2:
+            self._corda_lateral_anterior = None
             return None, None
-        ordenadas = sorted(maos[:2], key=lambda m: m.palma[0])
-        return ordenadas[1 - self.indice_corda_lateral], ordenadas[self.indice_corda_lateral]
+        a, b = maos[:2]
+        anterior = self._corda_lateral_anterior  # (palma do arco, palma da corda) no quadro anterior
+        arco = corda = None
+        if anterior is not None:
+            # Escolhe a atribuição com menor deslocamento total das duas mãos.
+            direto = distancia(a.palma, anterior[0]) + distancia(b.palma, anterior[1])
+            trocado = distancia(b.palma, anterior[0]) + distancia(a.palma, anterior[1])
+            if min(direto, trocado) < 0.3:  # salto grande: volta para a ordem em x
+                arco, corda = (a, b) if direto <= trocado else (b, a)
+        if corda is None:
+            ordenadas = sorted((a, b), key=lambda m: m.palma[0])
+            corda, arco = ordenadas[self.indice_corda_lateral], ordenadas[1 - self.indice_corda_lateral]
+        self._corda_lateral_anterior = (arco.palma, corda.palma)
+        return arco, corda
 
     def _medir(self):
         """Mão do arco (frontal), mão da corda, distância entre palmas e a câmera que a mediu."""
         mf, ml = self._maos(self.frontal), self._maos(self.lateral)
         self.maos_frontal, self.maos_lateral = len(mf), len(ml)
+        self._maos_frontais = mf
+        self.maos_camera = {"frontal": mf, "lateral": ml}  # mesma leitura dos pares (para desenhar)
         arco_f, corda_f = self._papeis_frontal(mf)
         arco_l, corda_l = self._papeis_lateral(ml)
+        self.pares = {"frontal": (arco_f, corda_f), "lateral": (arco_l, corda_l)}
+        for nome, corda in (("frontal", corda_f), ("lateral", corda_l)):
+            rastro = self.rastros[nome]
+            if corda is None:
+                rastro.clear()
+            elif not rastro or rastro[-1] != corda.palma:
+                rastro.append(corda.palma)
         if arco_l and corda_l:
             return arco_f, corda_l, distancia(arco_l.palma, corda_l.palma), "lateral"
         if arco_f and corda_f:
@@ -184,22 +247,35 @@ class Entrada:
             alvo_y = m3.limitar((arco.palma[1] - self.centro[1]) / 0.2, -1, 1)
             mx, my = self._mira_gesto
             self._mira_gesto = (m3.lerp(mx, alvo_x, SUAVIZACAO), m3.lerp(my, alvo_y, SUAVIZACAO))
+            # Inclinação: ângulo do vetor pulso -> base do dedo médio em relação à vertical.
+            px, py = arco.pontos[0]
+            qx, qy = arco.palma
+            angulo = m3.limitar(math.atan2(qx - px, py - qy), -0.7, 0.7)
+            self.inclinacao = m3.lerp(self.inclinacao, angulo, 0.25)
+        self._atualizar_dedos(agora)
 
         if corda is None:
+            # Perda curta (oclusão, borrão) durante a puxada: mantém o estado e a força.
+            if self._puxando_gesto and agora - self._ultima_corda < TOLERANCIA_PERDA:
+                return
             self._puxando_gesto = self._fechada = False  # mão da corda sumiu: cancela sem atirar
             return
+        self._ultima_corda = agora
 
         estava = self._fechada
         self._fechada = self._esta_fechada(corda, estava)
+        if self._fechada and not estava and corda.dedos:
+            self._fechada = False  # mostrando 1-3 dedos para trocar de posto: não é a corda presa
         forca = self.escalas[fonte].forca(dist) if dist is not None else None
 
         if self._fechada and not estava:
             self._eventos.append("confirmar")
             self._puxando_gesto = forca is not None
             self._forca_gesto = 0.0
+            self._filtro_forca.reiniciar(forca or 0.0)
             self._historico.clear()
         if self._fechada and self._puxando_gesto and forca is not None:
-            self._forca_gesto = m3.lerp(self._forca_gesto, forca, 0.5)
+            self._forca_gesto = m3.limitar(self._filtro_forca.atualizar(forca))
             self._historico.append((agora, self._forca_gesto))
         if not self._fechada and estava and self._puxando_gesto:
             self._puxando_gesto = False
@@ -207,6 +283,25 @@ class Entrada:
             forca_disparo = max(recentes, default=self._forca_gesto)
             if forca_disparo >= FORCA_MINIMA:
                 self._eventos.append(("disparo", forca_disparo))
+
+    def _atualizar_dedos(self, agora):
+        """Qualquer mão (câmera frontal) com 1, 2 ou 3 dedos por TEMPO_DEDOS -> troca de posto.
+
+        Se as duas mãos mostrarem contagens diferentes, nada acontece. Nunca durante uma
+        puxada; depois de disparar, só aceita de novo quando a contagem mudar.
+        """
+        contagens = {m.dedos for m in self._maos_frontais if m.dedos}
+        n = contagens.pop() if len(contagens) == 1 and not self._puxando_gesto else 0
+        if n != self.dedos_atual:
+            self.dedos_atual, self._dedos_desde, self._dedos_usado = n, agora, False
+        if n == 0 or self._dedos_usado:
+            self.progresso_dedos = 0.0
+            return
+        self.progresso_dedos = m3.limitar((agora - self._dedos_desde) / TEMPO_DEDOS)
+        if self.progresso_dedos >= 1:
+            self._dedos_usado = True
+            self.progresso_dedos = 0.0
+            self._eventos.append(("posto", n))
 
     # ---------------------------------------------------------------- calibração guiada
 
@@ -232,6 +327,7 @@ class Entrada:
 
     def calibrar(self, dt):
         """Avança a calibração guiada: preparo (contagem) -> coleta parada -> validação."""
+        self._medir()  # mantém os pares e rastros das prévias atualizados
         mf, ml = self._maos(self.frontal), self._maos(self.lateral)
         self.maos_frontal, self.maos_lateral = len(mf), len(ml)
         arco_f, corda_f = self._papeis_frontal(mf)
@@ -318,6 +414,27 @@ class Entrada:
                 medida = True
         return medida
 
+    def exportar_calibracao(self):
+        """Dados da calibração para salvar por pessoa (config.json)."""
+        return {
+            "centro": list(self.centro),
+            "escalas": {k: [e.repouso, e.cheia] for k, e in self.escalas.items()},
+            "indice_corda_lateral": self.indice_corda_lateral,
+            "canhoto": self.canhoto,
+        }
+
+    def importar_calibracao(self, dados):
+        try:
+            self.centro = tuple(dados["centro"])
+            self.escalas = {k: Escala(*v) for k, v in dados["escalas"].items()}
+            self.indice_corda_lateral = int(dados["indice_corda_lateral"])
+            self.canhoto = bool(dados.get("canhoto", False))
+        except (KeyError, TypeError, ValueError):
+            return False
+        self.calibrado = True
+        self.etapa = 2
+        return True
+
     def gesto_polegar(self, dt):
         """'cima'/'baixo' quando o polegar fica nessa posição por TEMPO_POLEGAR segundos."""
         atual = None
@@ -370,6 +487,8 @@ class Entrada:
                 cmd.confirmar = True
             elif evento[0] == "disparo":
                 cmd.disparou, cmd.forca_disparo = True, evento[1]
+            elif evento[0] == "posto":
+                cmd.posto = evento[1]
         self._eventos = []
 
         if self._soltou_mouse:

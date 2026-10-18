@@ -10,20 +10,58 @@ import pygame
 
 import mat3d as m3
 
-LUZ = np.array((-0.45, 0.8, -0.35))
-LUZ = LUZ / np.linalg.norm(LUZ)
-AMBIENTE = 0.42
 DIFUSA = 0.68
-TOM_LUZ = np.array((1.0, 0.93, 0.80))  # sol de fim de tarde
-
-CEU_TOPO = (104, 152, 200)
-CEU_HORIZONTE = (238, 212, 170)
-NEBLINA = np.array(CEU_HORIZONTE, dtype=float) * 0.92
-GRAMA_PERTO = (82, 118, 52)
-GRAMA_LONGE = (128, 150, 96)
 NEBLINA_INICIO, NEBLINA_FIM, NEBLINA_MAX = 30.0, 170.0, 0.88
 NEAR = 0.15
 DISTANCIA_MAX = 230.0
+
+
+# Paletas do ciclo de luz: o torneio começa à tarde e termina no pôr do sol.
+TARDE = dict(sol=(-38, 9), luz=(-0.45, 0.8, -0.35), ambiente=0.42, tom=(1.0, 0.93, 0.80), ceu_topo=(104, 152, 200),
+             ceu_horizonte=(238, 212, 170), grama_perto=(82, 118, 52), grama_longe=(128, 150, 96),
+             cor_sol=(255, 244, 214))
+POR_DO_SOL = dict(sol=(-50, 1.5), luz=(-0.75, 0.38, -0.3), ambiente=0.34, tom=(1.0, 0.70, 0.48), ceu_topo=(58, 66, 120),
+                  ceu_horizonte=(250, 150, 92), grama_perto=(62, 84, 40), grama_longe=(150, 120, 80),
+                  cor_sol=(255, 190, 120))
+
+
+class Iluminacao:
+    """Estado global da luz. `versao` muda a cada ajuste para os lotes se reiluminarem."""
+
+    def __init__(self):
+        self.versao = 0
+        self.hora = -1.0
+        self.definir_hora(0.0)
+
+    def definir_hora(self, hora):
+        """hora em [0, 1]: 0 = tarde, 1 = pôr do sol."""
+        hora = m3.limitar(hora)
+        if abs(hora - self.hora) < 0.02:
+            return False
+        self.hora = hora
+        mistura = lambda a, b: tuple(m3.lerp(x, y, hora) for x, y in zip(a, b))
+        yaw, elev = mistura(TARDE["sol"], POR_DO_SOL["sol"])
+        self.direcao_sol = m3.direcao(math.radians(yaw), math.radians(elev))
+        # A luz do sombreamento vem de trás do jogador (ilumina a frente dos alvos) e desce ao entardecer.
+        luz = np.array(mistura(TARDE["luz"], POR_DO_SOL["luz"]))
+        self.luz = luz / np.linalg.norm(luz)
+        self.ambiente = m3.lerp(TARDE["ambiente"], POR_DO_SOL["ambiente"], hora)
+        self.tom = np.array(mistura(TARDE["tom"], POR_DO_SOL["tom"]))
+        for chave in ("ceu_topo", "ceu_horizonte", "grama_perto", "grama_longe", "cor_sol"):
+            setattr(self, chave, tuple(int(c) for c in mistura(TARDE[chave], POR_DO_SOL[chave])))
+        self.neblina = np.array(self.ceu_horizonte, dtype=float) * 0.92
+        self.versao += 1
+        return True
+
+    def iluminar(self, cores_base, normais, destaque):
+        lambert = np.clip(normais @ self.luz, 0, 1)
+        intensidade = self.ambiente + DIFUSA * lambert
+        cores = np.clip(cores_base * intensidade[:, None] * self.tom, 0, 255)
+        cores[destaque] = np.clip(cores[destaque] * 1.15 + 25, 0, 255)
+        return cores
+
+
+ILUMINACAO = Iluminacao()
 
 
 class Lote:
@@ -59,26 +97,42 @@ class Lote:
         self.mascara = np.arange(largura)[None, :] < self.contagem[:, None]
         self.centros = (v[self.indices] * self.mascara[..., None]).sum(axis=1) / self.contagem[:, None]
 
-        lambert = np.clip(normal @ LUZ, 0, 1)
-        intensidade = AMBIENTE + DIFUSA * lambert
-        base_cor = np.array(cores, dtype=float)
-        self.cores = np.clip(base_cor * intensidade[:, None] * TOM_LUZ, 0, 255)
-        self.cores[self.destaque] = np.clip(self.cores[self.destaque] * 1.15 + 25, 0, 255)
+        self.cores_base = np.array(cores, dtype=float)
+        self._versao_luz = -1
+        self._cores = None
+
+    @property
+    def cores(self):
+        """Cores iluminadas, recalculadas só quando a luz muda (ciclo do dia)."""
+        if self._versao_luz != ILUMINACAO.versao:
+            self._cores = ILUMINACAO.iluminar(self.cores_base, self.normais, self.destaque)
+            self._versao_luz = ILUMINACAO.versao
+        return self._cores
 
 
 class Renderizador:
     def __init__(self, largura, altura):
         self.largura, self.altura = largura, altura
         self.centro = (largura / 2, altura / 2)
-        self.fundo = self._gradiente(altura * 3, [(0.0, CEU_TOPO), (0.5, CEU_HORIZONTE)])
-        self.chao = self._gradiente(altura * 2, [(0.0, GRAMA_LONGE), (0.04, (110, 136, 78)), (0.4, GRAMA_PERTO), (1.0, (60, 92, 40))])
-        self.sol = pygame.Surface((140, 140), pygame.SRCALPHA)
-        for raio, alfa in ((70, 30), (45, 60), (26, 255)):
-            pygame.draw.circle(self.sol, (255, 244, 214, alfa), (70, 70), raio)
+        self._versao_fundo = -1
         self.focal = m3.distancia_focal(largura, 70)
         self.visao = np.eye(4)
         self.posicao = np.zeros(3)
         self.yaw = self.pitch = 0.0
+
+    def _atualizar_fundo(self):
+        """Céu, chão e sol seguem a hora do dia; só são refeitos quando a luz muda."""
+        if self._versao_fundo == ILUMINACAO.versao:
+            return
+        il = ILUMINACAO
+        self.fundo = self._gradiente(self.altura * 3, [(0.0, il.ceu_topo), (0.5, il.ceu_horizonte)])
+        medio = tuple(int(m3.lerp(a, b, 0.5)) for a, b in zip(il.grama_longe, il.grama_perto))
+        escuro = tuple(int(c * 0.72) for c in il.grama_perto)
+        self.chao = self._gradiente(self.altura * 2, [(0.0, il.grama_longe), (0.04, medio), (0.4, il.grama_perto), (1.0, escuro)])
+        self.sol = pygame.Surface((140, 140), pygame.SRCALPHA)
+        for raio, alfa in ((70, 30), (45, 60), (26, 255)):
+            pygame.draw.circle(self.sol, (*il.cor_sol, alfa), (70, 70), raio)
+        self._versao_fundo = il.versao
 
     def _gradiente(self, altura, paradas):
         sup = pygame.Surface((1, altura))
@@ -112,7 +166,9 @@ class Renderizador:
 
     # ---------------------------------------------------------------- fundo
 
-    def desenhar_fundo(self, tela, direcao_sol):
+    def desenhar_fundo(self, tela, direcao_sol=None):
+        self._atualizar_fundo()
+        direcao_sol = ILUMINACAO.direcao_sol if direcao_sol is None else direcao_sol
         horizonte = self.centro[1] + self.focal * math.tan(self.pitch)
         tela.blit(self.fundo, (0, int(horizonte - self.fundo.get_height() / 2)))
         sol = self.projetar_ponto(self.posicao + direcao_sol * 500)
@@ -146,7 +202,7 @@ class Renderizador:
         visivel &= ~fora
 
         neblina = np.clip((prof - NEBLINA_INICIO) / (NEBLINA_FIM - NEBLINA_INICIO), 0, NEBLINA_MAX)
-        cores = lote.cores * (1 - neblina[:, None]) + NEBLINA * neblina[:, None]
+        cores = lote.cores * (1 - neblina[:, None]) + ILUMINACAO.neblina * neblina[:, None]
 
         # Faces que cruzam o plano near são recortadas em 3D; as demais só precisam de
         # recorte 2D quando ultrapassam a janela. Faces menores que um pixel são ignoradas.

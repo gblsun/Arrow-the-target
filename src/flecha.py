@@ -99,3 +99,28 @@ class Flecha:
             self.pos = self.pos + direcao * PENETRACAO
         yaw, pitch = m3.angulos_de(direcao)
         self.m_fixa = m3.compor(m3.translacao(*self.pos), m3.orientacao(yaw, pitch))
+
+
+def angulo_para(origem, alvo, velocidade, iteracoes=30):
+    """(yaw, pitch) para acertar `alvo` saindo de `origem` com `velocidade`, sem vento.
+
+    Yaw pela direção horizontal; pitch por bisseção, simulando só a gravidade até o plano do alvo.
+    """
+    origem, alvo = np.asarray(origem, float), np.asarray(alvo, float)
+    delta = alvo - origem
+    yaw = math.atan2(delta[0], delta[2])
+    horizontal = math.hypot(delta[0], delta[2])
+
+    def altura_ao_chegar(pitch):
+        vh, vy = velocidade * math.cos(pitch), velocidade * math.sin(pitch)
+        t = horizontal / vh
+        return origem[1] + vy * t - 0.5 * GRAVIDADE * t * t
+
+    baixo, alto = -0.5, 0.7
+    for _ in range(iteracoes):
+        meio = (baixo + alto) / 2
+        if altura_ao_chegar(meio) < alvo[1]:
+            baixo = meio
+        else:
+            alto = meio
+    return yaw, (baixo + alto) / 2
