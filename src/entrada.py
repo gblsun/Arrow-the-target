@@ -7,7 +7,7 @@ Papéis das mãos (destro; a tecla L inverte):
 """
 import math
 import time
-from collections import deque
+from collections import Counter, deque
 from statistics import median
 from dataclasses import dataclass
 
@@ -34,6 +34,14 @@ TAMANHO_RASTRO = 15
 TEMPO_PUXADA_MOUSE = 1.1
 
 ETAPAS_CALIBRACAO = [
+    ("Mão esquerda", [
+        "Levante só a mão esquerda, aberta, à frente do corpo (onde fica o arco).",
+        "Deixe a mão direita abaixada, fora das duas câmeras.",
+    ]),
+    ("Mão direita", [
+        "Abaixe a esquerda e levante só a mão direita, aberta, perto do rosto.",
+        "As duas câmeras devem ver apenas essa mão.",
+    ]),
     ("Arco em repouso", [
         "Braço esquerdo esticado à frente, mão na altura do peito.",
         "Mão direita fechada, encostada na esquerda, segurando a corda.",
@@ -47,6 +55,8 @@ ETAPAS_CALIBRACAO = [
         "Polegar para cima (ou Enter) começa; polegar para baixo refaz.",
     ]),
 ]
+ETAPA_ESQUERDA, ETAPA_DIREITA, ETAPA_REPOUSO, ETAPA_PUXADA, ETAPA_TESTE = range(5)
+ROTULOS_PADRAO = {"esquerda": "Left", "direita": "Right"}
 
 
 @dataclass
@@ -100,6 +110,7 @@ class Entrada:
         self.centro = (0.5, 0.5)
         self.escalas = {"frontal": Escala(0.08, 0.32), "lateral": Escala(0.08, 0.40)}
         self.indice_corda_lateral = 1  # posição (ordem em x) da mão da corda na imagem lateral
+        self.rotulos = dict(ROTULOS_PADRAO)  # lateralidade que o MediaPipe dá a cada mão real (frontal)
         self.reiniciar_calibracao()
 
         self._mira_gesto = (0.0, 0.0)
@@ -160,7 +171,7 @@ class Entrada:
 
     @property
     def lado_arco(self):
-        return "Right" if self.canhoto else "Left"
+        return self.rotulos["direita" if self.canhoto else "esquerda"]
 
     def definir_cameras(self, frontal, lateral):
         self.frontal, self.lateral = frontal, lateral
@@ -307,8 +318,10 @@ class Entrada:
 
     def reiniciar_calibracao(self):
         self.calibrado = False
-        self.etapa = 0
-        self._amostras = [[], []]
+        self.etapa = ETAPA_ESQUERDA
+        self._amostras = [[] for _ in ETAPAS_CALIBRACAO]
+        self.rotulos = dict(ROTULOS_PADRAO)
+        self._lateral_identificada = False  # ordem em x das mãos na lateral já veio das etapas 1 e 2
         self.checklist = []
         self.teste_forca = None
         self._polegar, self._tempo_polegar = None, 0.0
@@ -325,11 +338,44 @@ class Entrada:
     def progresso_etapa(self):
         return m3.limitar(self._tempo_etapa / TEMPO_ETAPA)
 
+    @property
+    def _usa_lateral(self):
+        return self.lateral is not None and self.lateral.ativo
+
     def calibrar(self, dt):
         """Avança a calibração guiada: preparo (contagem) -> coleta parada -> validação."""
         self._medir()  # mantém os pares e rastros das prévias atualizados
         mf, ml = self._maos(self.frontal), self._maos(self.lateral)
         self.maos_frontal, self.maos_lateral = len(mf), len(ml)
+        if self.etapa in (ETAPA_ESQUERDA, ETAPA_DIREITA):
+            pose, amostra, aviso = self._pose_uma_mao(mf, ml)
+        else:
+            pose, amostra, aviso = self._pose_arco(mf, ml)
+        if self.etapa == ETAPA_TESTE:
+            return
+        self._coletar(dt, pose, amostra, aviso)
+
+    def _pose_uma_mao(self, mf, ml):
+        """Etapas 1 e 2: só a mão da vez aparece, e cada câmera aprende qual mão é ela."""
+        lado = "esquerda" if self.etapa == ETAPA_ESQUERDA else "direita"
+        so_uma_f, so_uma_l = len(mf) == 1, len(ml) == 1
+        self.checklist = [(f"Câmera frontal vê só a mão {lado}", so_uma_f)]
+        if self._usa_lateral:
+            self.checklist.append((f"Câmera lateral vê só a mão {lado}", so_uma_l))
+        aviso = "Mostre só a mão " + lado + ", com a outra abaixada"
+        if lado == "direita" and self._amostras[ETAPA_ESQUERDA]:
+            diferente = so_uma_f and mf[0].lado != self.rotulos["esquerda"]
+            self.checklist.append(("Reconhecida como outra mão (não a esquerda)", diferente))
+            if so_uma_f and not diferente:
+                aviso = "A câmera frontal confundiu com a esquerda: mostre a palma de frente"
+        if not all(ok for _, ok in self.checklist):
+            return None, None, aviso
+        lateral = ml[0].palma if self._usa_lateral else None
+        pose = [mf[0].palma] + ([lateral] if lateral else [])
+        return pose, {"rotulo": mf[0].lado, "lateral": lateral}, ""
+
+    def _pose_arco(self, mf, ml):
+        """Etapas 3 a 5: as duas mãos na pose do arco."""
         arco_f, corda_f = self._papeis_frontal(mf)
         lateral = sorted(ml[:2], key=lambda m: m.palma[0]) if len(ml) >= 2 else None
         corda = corda_f or (min(ml, key=lambda m: m.curvatura) if ml else None)
@@ -338,22 +384,30 @@ class Entrada:
             ("Mão esquerda vista pela câmera frontal", arco_f is not None),
             ("Mão direita fechada, segurando a corda", fechada),
         ]
-        if self.lateral is not None and self.lateral.ativo:
+        if self._usa_lateral:
             self.checklist.append(("Câmera lateral vê as duas mãos", lateral is not None))
-        if self.etapa == 2:
-            return
+        if not all(ok for _, ok in self.checklist):
+            return None, None, "Ajuste a pose até todos os itens ficarem verdes"
+        pose = [arco_f.palma, corda.palma] + ([m.palma for m in lateral] if lateral else [])
+        amostra = {
+            "palma": arco_f.palma,
+            "frontal": distancia(arco_f.palma, corda_f.palma) if corda_f else None,
+            "lateral": [m.palma for m in lateral] if lateral else None,
+        }
+        return pose, amostra, ""
 
+    def _coletar(self, dt, pose, amostra, aviso):
+        """Conta o tempo parado na pose e guarda as amostras da etapa atual."""
         if self.fase == "preparar":
             self.contagem -= dt
             if self.contagem <= 0:
                 self.fase = "coletar"
             return
 
-        if not all(ok for _, ok in self.checklist):
+        if pose is None:
             self._tempo_etapa = max(0.0, self._tempo_etapa - dt * 0.5)
-            self.aviso = "Ajuste a pose até todos os itens ficarem verdes"
+            self.aviso = aviso
             return
-        pose = [arco_f.palma, corda.palma] + ([m.palma for m in lateral] if lateral else [])
         if self._ultima_pose is not None and len(pose) == len(self._ultima_pose):
             movimento = max(distancia(a, b) for a, b in zip(pose, self._ultima_pose))
         else:
@@ -366,32 +420,58 @@ class Entrada:
 
         self.aviso = ""
         self._tempo_etapa += dt
-        self._amostras[self.etapa].append({
-            "palma": arco_f.palma,
-            "frontal": distancia(arco_f.palma, corda_f.palma) if corda_f else None,
-            "lateral": [m.palma for m in lateral] if lateral else None,
-        })
+        self._amostras[self.etapa].append(amostra)
         if self._tempo_etapa >= TEMPO_ETAPA:
             self.avancar_etapa()
 
     def avancar_etapa(self):
         """Conclui a etapa atual (também usado pelo Enter para pular)."""
-        if self.etapa == 0:
-            self.etapa = 1
+        if self.etapa == ETAPA_ESQUERDA:
+            self._identificar_esquerda()
+            self.etapa = ETAPA_DIREITA
             self._preparar("")
-        elif self.etapa == 1:
+        elif self.etapa == ETAPA_DIREITA:
+            self._identificar_direita()
+            self.etapa = ETAPA_REPOUSO
+            self._preparar("")
+        elif self.etapa == ETAPA_REPOUSO:
+            self.etapa = ETAPA_PUXADA
+            self._preparar("")
+        elif self.etapa == ETAPA_PUXADA:
             ok = self._concluir()
-            if not ok and self._amostras[1]:
-                self._amostras[1] = []
+            if not ok and self._amostras[ETAPA_PUXADA]:
+                self._amostras[ETAPA_PUXADA] = []
                 self._preparar("A puxada foi curta: leve a mão direita até o rosto")
                 return
-            self.etapa = 2
+            self.etapa = ETAPA_TESTE
             self.calibrado = True
             self.teste_forca = None
 
+    def _identificar_esquerda(self):
+        """Rótulo do MediaPipe mais frequente para a mão esquerda real na câmera frontal."""
+        amostras = [a["rotulo"] for a in self._amostras[ETAPA_ESQUERDA] if a["rotulo"]]
+        if amostras:
+            self.rotulos["esquerda"] = Counter(amostras).most_common(1)[0][0]
+            self.rotulos["direita"] = "Right" if self.rotulos["esquerda"] == "Left" else "Left"
+
+    def _identificar_direita(self):
+        """Rótulo da mão direita na frontal e, na lateral, de que lado (em x) fica cada mão."""
+        esquerda, direita = self._amostras[ETAPA_ESQUERDA], self._amostras[ETAPA_DIREITA]
+        rotulos = [a["rotulo"] for a in direita if a["rotulo"]]
+        if rotulos:
+            self.rotulos["direita"] = Counter(rotulos).most_common(1)[0][0]
+            if not esquerda:  # esquerda pulada: fica com o outro rótulo
+                self.rotulos["esquerda"] = "Right" if self.rotulos["direita"] == "Left" else "Left"
+        xe = [a["lateral"][0] for a in esquerda if a["lateral"]]
+        xd = [a["lateral"][0] for a in direita if a["lateral"]]
+        if xe and xd and abs(median(xd) - median(xe)) > AMPLITUDE_MINIMA:
+            indice_direita = 1 if median(xd) > median(xe) else 0
+            self.indice_corda_lateral = 1 - indice_direita if self.canhoto else indice_direita
+            self._lateral_identificada = True
+
     def _concluir(self):
         """Calcula mira e escalas de força pela mediana das amostras. False se a puxada foi curta."""
-        repouso, cheia = self._amostras
+        repouso, cheia = self._amostras[ETAPA_REPOUSO], self._amostras[ETAPA_PUXADA]
         if repouso:
             self.centro = (median(a["palma"][0] for a in repouso), median(a["palma"][1] for a in repouso))
         medida = False
@@ -403,10 +483,11 @@ class Entrada:
         l0 = [a["lateral"] for a in repouso if a["lateral"]]
         l1 = [a["lateral"] for a in cheia if a["lateral"]]
         if l0 and l1:
-            # A mão da corda é a que mais se deslocou entre o repouso e a puxada.
-            mediana = lambda pts, i: (median(p[i][0] for p in pts), median(p[i][1] for p in pts))
-            desloc = [distancia(mediana(l0, i), mediana(l1, i)) for i in (0, 1)]
-            self.indice_corda_lateral = 0 if desloc[0] > desloc[1] else 1
+            if not self._lateral_identificada:
+                # Sem as etapas 1 e 2: a mão da corda é a que mais se deslocou entre o repouso e a puxada.
+                mediana = lambda pts, i: (median(p[i][0] for p in pts), median(p[i][1] for p in pts))
+                desloc = [distancia(mediana(l0, i), mediana(l1, i)) for i in (0, 1)]
+                self.indice_corda_lateral = 0 if desloc[0] > desloc[1] else 1
             r0 = median(distancia(p[0], p[1]) for p in l0)
             r1 = median(distancia(p[0], p[1]) for p in l1)
             if r1 - r0 > AMPLITUDE_MINIMA:
@@ -421,18 +502,23 @@ class Entrada:
             "escalas": {k: [e.repouso, e.cheia] for k, e in self.escalas.items()},
             "indice_corda_lateral": self.indice_corda_lateral,
             "canhoto": self.canhoto,
+            "rotulos": dict(self.rotulos),
         }
 
     def importar_calibracao(self, dados):
         try:
-            self.centro = tuple(dados["centro"])
-            self.escalas = {k: Escala(*v) for k, v in dados["escalas"].items()}
-            self.indice_corda_lateral = int(dados["indice_corda_lateral"])
-            self.canhoto = bool(dados.get("canhoto", False))
+            centro = tuple(dados["centro"])
+            escalas = {k: Escala(*v) for k, v in dados["escalas"].items()}
+            indice = int(dados["indice_corda_lateral"])
+            rotulos = dict(dados.get("rotulos", ROTULOS_PADRAO))  # calibrações antigas não têm
+            if len(centro) != 2 or set(rotulos) != set(ROTULOS_PADRAO):
+                return False
         except (KeyError, TypeError, ValueError):
             return False
+        self.centro, self.escalas, self.indice_corda_lateral, self.rotulos = centro, escalas, indice, rotulos
+        self.canhoto = bool(dados.get("canhoto", False))
         self.calibrado = True
-        self.etapa = 2
+        self.etapa = ETAPA_TESTE
         return True
 
     def gesto_polegar(self, dt):

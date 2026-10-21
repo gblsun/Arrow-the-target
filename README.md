@@ -65,11 +65,13 @@ Use duas webcams: a **frontal** fica de frente para você e a **lateral** fica d
 - **Som**: a corda range e estala conforme estica, e os impactos soam à esquerda ou à direita conforme onde caíram.
 
 A calibração é guiada, com um pergaminho ilustrando a pose de cada etapa, uma contagem regressiva para você se posicionar e uma lista que fica verde quando as câmeras veem o que precisam:
-1. **Arco em repouso**: braço esquerdo esticado, mão direita fechada encostada na esquerda.
-2. **Puxada completa**: mão direita fechada junto ao rosto. Se a puxada for curta demais, a etapa é repetida.
-3. **Tiro de teste**: puxe e solte uma flecha para ver a força alcançada. Polegar para cima (ou Enter) começa o torneio; polegar para baixo (ou `K`) refaz.
+1. **Mão esquerda**: levante só a mão esquerda, aberta, à frente do corpo, com a direita abaixada. O jogo grava como cada câmera enxerga a sua mão esquerda.
+2. **Mão direita**: abaixe a esquerda e levante só a direita, aberta, perto do rosto. Se a câmera frontal confundir com a esquerda, o jogo avisa e espera.
+3. **Arco em repouso**: braço esquerdo esticado, mão direita fechada encostada na esquerda.
+4. **Puxada completa**: mão direita fechada junto ao rosto. Se a puxada for curta demais, a etapa é repetida.
+5. **Tiro de teste**: puxe e solte uma flecha para ver a força alcançada. Polegar para cima (ou Enter) começa o torneio; polegar para baixo (ou `K`) refaz.
 
-Cada etapa só conta enquanto você está parado na pose, e os valores usam a mediana das amostras. Com isso o jogo aprende o centro da mira, quanto da puxada vale força 100% e qual mão é a da corda na imagem lateral. Os papéis das mãos vêm da lateralidade detectada pelo MediaPipe. `L` inverte os papéis (canhoto) e `V` troca qual câmera é a frontal e qual é a lateral.
+Cada etapa só conta enquanto você está parado na pose, e os valores usam a mediana das amostras. Com isso o jogo aprende o centro da mira, quanto da puxada vale força 100% e qual mão é a da corda na imagem lateral. Os papéis das mãos vêm da lateralidade detectada pelo MediaPipe, ligada à sua mão real nas etapas 1 e 2. `L` inverte os papéis (canhoto) e `V` troca qual câmera é a frontal e qual é a lateral.
 
 A calibração fica **salva por arqueiro** (pelo nome do menu): na próxima vez, quem já calibrou vai direto para o jogo. `K` refaz. Girar a mão do arco inclina o arco na tela, e a força passa por um filtro de Kalman para não tremer.
 
@@ -88,7 +90,7 @@ A calibração fica **salva por arqueiro** (pelo nome do menu): na próxima vez,
 | `C` | mostra ou esconde as câmeras |
 | `Tab` | escolher câmeras (no menu, pausa ou resultado) |
 | `V` | troca câmera frontal e lateral |
-| `F11` | alterna tela cheia/janela (abre em tela cheia; `--janela` para começar em janela) |
+| `F11` | alterna tela cheia (janela sem bordas do tamanho do monitor) e janela normal; abre em tela cheia, `--janela` para começar em janela |
 | `L` / `K` | modo canhoto / recalibrar gesto |
 | `Esc` | sair |
 

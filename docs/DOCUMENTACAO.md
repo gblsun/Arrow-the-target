@@ -32,7 +32,7 @@ CAMERAS ──► MENU ──► CALIBRANDO ──► JOGANDO ⇄ PAUSADO
 
 | Módulo | Papel |
 |---|---|
-| `main.py` | Janela 1280×720 (tela cheia `SCALED`), laço com Δt, estados, modos, placar, navegação, disparo, persistência |
+| `main.py` | Janela 1280×720 (`SCALED`; tela cheia = janela sem bordas do tamanho do monitor), laço com Δt, estados, modos, placar, navegação, disparo, persistência |
 | `mat3d.py` | Matrizes 4×4, câmera, projeção, recorte no plano near, sombra planar, interpolação e easing |
 | `modelos.py` | Malhas low-poly procedurais (árvores e versões simplificadas, bétula, arbusto, grama, flores, alvos, cercas, flecha, arco em primeira pessoa) e leitor OBJ |
 | `render.py` | Renderização em software: transformação, descarte, iluminação com ciclo do dia, neblina e algoritmo do pintor |
@@ -188,8 +188,8 @@ Os picos são normalizados para 0,9 antes da conversão para 16 bits. Sem dispos
 
 ### Regras
 
-- **Papéis das mãos**: com a imagem espelhada, a lateralidade do MediaPipe (`Left`/`Right`) corresponde à mão real do usuário. A esquerda é o arco e a direita é a corda; `L` inverte. Se a lateralidade vier ambígua, a mão maior, mais perto da câmera frontal, é a do arco.
-- **Câmera lateral**: de perfil, a lateralidade não é confiável. A mão da corda é a que mais se moveu na calibração e, quadro a quadro, a atribuição que menos desloca as duas mãos em relação ao quadro anterior. Assim, a identificação sobrevive a cruzamentos rápidos. Se as duas saltarem muito, volta para a ordem em x calibrada.
+- **Papéis das mãos**: a lateralidade do MediaPipe (`Left`/`Right`) é ligada à mão real do usuário nas etapas 1 e 2 da calibração (`Entrada.rotulos`). A esquerda é o arco e a direita é a corda; `L` inverte. Se a lateralidade vier ambígua, a mão maior, mais perto da câmera frontal, é a do arco.
+- **Câmera lateral**: de perfil, a lateralidade não é confiável. De que lado fica a mão da corda vem das etapas 1 e 2 da calibração (ou, se foram puladas, é a que mais se moveu na puxada) e, quadro a quadro, a atribuição que menos desloca as duas mãos em relação ao quadro anterior. Assim, a identificação sobrevive a cruzamentos rápidos. Se as duas saltarem muito, volta para a ordem em x calibrada.
 - **Mira**: posição da palma esquerda em relação ao centro calibrado, com média móvel exponencial (`SUAVIZACAO = 0.35`). Vira yaw e pitch da câmera, limitados a ±32° e ±16°.
 - **Inclinação**: o ângulo do vetor pulso → palma da mão esquerda (limitado a ±0,7 rad e suavizado) inclina o arco em primeira pessoa.
 - **Mão fechada ou aberta, com histerese**: a mão é considerada fechada com pinça (`abertura < PINCA_FECHA`) **ou** punho (`curvatura < CURVA_FECHA`). Ela só é considerada aberta quando a pinça abre **e** os dedos se estendem. A faixa entre os limites evita que o estado oscile.
@@ -225,9 +225,13 @@ Os picos são normalizados para 0,9 antes da conversão para 16 bits. Sem dispos
 
 Feita em `Entrada.calibrar` e desenhada por `telas.tela_calibracao`, com o arqueiro ilustrado em pergaminho:
 
-1. **Arco em repouso**: define o centro da mira e a distância de repouso.
-2. **Puxada completa**: mão direita fechada junto ao rosto. Define a força 100% e qual mão é a da corda na imagem lateral.
-3. **Tiro de teste**: mostra a força alcançada. Polegar para cima (ou Enter) começa; polegar para baixo (ou `K`) refaz.
+1. **Mão esquerda**: só a mão esquerda levantada, à frente do corpo, e a direita abaixada. Cada câmera precisa ver exatamente uma mão. A frontal guarda o rótulo que o MediaPipe deu a ela (`Entrada.rotulos["esquerda"]`), e a lateral guarda onde ela fica em x.
+2. **Mão direita**: só a direita levantada, perto do rosto. Só conclui se a frontal der a ela um rótulo **diferente** do da esquerda; senão, avisa que confundiu as mãos. Com as posições das duas etapas, a lateral sabe de que lado (em x) fica a mão da corda.
+3. **Arco em repouso**: define o centro da mira e a distância de repouso.
+4. **Puxada completa**: mão direita fechada junto ao rosto. Define a força 100%. Se as etapas 1 e 2 foram puladas, também define qual mão é a da corda na lateral (a que mais se moveu).
+5. **Tiro de teste**: mostra a força alcançada. Polegar para cima (ou Enter) começa; polegar para baixo (ou `K`) refaz.
+
+Os papéis das mãos na frontal passam a usar os rótulos aprendidos, então funcionam mesmo se o MediaPipe chamar a mão esquerda de `Right`. Etapas puladas com Enter mantêm o padrão (`Left` = esquerda).
 
 Cuidados de robustez:
 
@@ -235,9 +239,9 @@ Cuidados de robustez:
 - checklist ao vivo;
 - coleta só com a pose **parada** (`ESTABILIDADE`);
 - **mediana** das amostras;
-- repetição da etapa 2 se a amplitude for menor que `AMPLITUDE_MINIMA`.
+- repetição da etapa 4 se a amplitude for menor que `AMPLITUDE_MINIMA`.
 
-A calibração é **salva por arqueiro** (`config.json → calibracoes[nome]`: centro, escalas, mão da corda na lateral, canhoto). Ao jogar, quem já tem calibração vai direto para a partida; trocar o nome no menu carrega a calibração dessa pessoa.
+A calibração é **salva por arqueiro** (`config.json → calibracoes[nome]`: centro, escalas, mão da corda na lateral, canhoto e rótulos das mãos; calibrações antigas, sem rótulos, usam o padrão). Ao jogar, quem já tem calibração vai direto para a partida; trocar o nome no menu carrega a calibração dessa pessoa.
 
 ## 8. Câmeras
 
@@ -335,7 +339,14 @@ Cada câmera ganha um `RastreadorMaos` que **reconecta automaticamente** se ela 
   - resultado com placar;
   - telas renderizadas e salvas como imagem;
   - tutorial completo: os três tiros da demonstração acertam (10, 10×2 e bônus 25×2), e no fim o jogo vai para a calibração (ou para o menu, sem câmera).
-- **Desempenho medido**: ~18–20 ms por quadro sem janela (escala de tela cheia), com ~6.400 faces estáticas, sombras e partículas.
+- **Desempenho medido** (i7-3770, sem câmeras): ~16,5 ms por quadro (~60 fps), com ~6.400 faces estáticas, sombras e partículas. Antes das otimizações abaixo eram ~24 ms (~41 fps). Com as duas câmeras e o MediaPipe rodando na mesma máquina, a CPU fica disputada e o jogo cai para ~40 fps.
+- **Otimizações do renderizador** (`render.py`), sem mudar a imagem:
+  - cada malha guarda seus arrays de faces (`_arrays_da_malha`), e os lotes dinâmicos são montados por quadro só com numpy;
+  - descarte grosso pela esfera de cada face (de costas, atrás, longe ou fora dos planos laterais) antes dos testes por vértice: das ~6.400 faces estáticas, só ~1.100 seguem;
+  - conversão para listas agrupada pelo número de vértices, sem os índices de preenchimento;
+  - recorte 2D só para polígonos que passam mais de `MARGEM_RECORTE` px acima ou abaixo da tela (o pygame percorre todas as linhas do polígono, mas corta cada linha na horizontal sem custo); a diferença são bordas de 1 px em polígonos que saem da tela;
+  - o HUD guarda os textos e painéis já renderizados.
+- **Laço**: `FPS_MAXIMO = 120`. Com o teto fixo em 60, qualquer atraso derrubava abaixo de 60.
 
 ## 13. Limitações conhecidas
 

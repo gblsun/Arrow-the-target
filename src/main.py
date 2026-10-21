@@ -10,6 +10,7 @@ import copy
 import json
 import math
 import random
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ import mat3d as m3
 import telas
 from tutorial import Tutorial
 from cena import ALTURA_OLHOS, LIMITE_LATERAL, POSTOS, Cena
-from entrada import Entrada
+from entrada import ETAPA_TESTE, Entrada
 from flecha import MALHA as MALHA_FLECHA
 from flecha import Flecha
 from hud import OURO, PERGAMINHO, VERDE, VERMELHO, Hud
@@ -29,6 +30,7 @@ from render import ILUMINACAO, Lote, Renderizador
 from sons import TAXA, Sons
 
 LARGURA, ALTURA = 1280, 720
+FPS_MAXIMO = 120  # teto do laço; com 60 fixos, qualquer atraso derrubava abaixo de 60
 TOTAL_FLECHAS = 15
 YAW_MAX, PITCH_MAX = math.radians(32), math.radians(16)
 FOV, ZOOM = 68.0, 12.0
@@ -105,10 +107,12 @@ class Jogo:
     def __init__(self, usar_camera=True, tela_cheia=True, som=True):
         pygame.mixer.pre_init(TAXA, -16, 2, 512)
         pygame.init()
-        # Renderiza em 1280x720 e o SDL amplia para a tela inteira (SCALED mantém a proporção).
-        bandeiras = pygame.SCALED | (pygame.FULLSCREEN if tela_cheia else 0)
-        self.tela = pygame.display.set_mode((LARGURA, ALTURA), bandeiras)
+        # Renderiza em 1280x720 e o SDL amplia para a janela (SCALED mantém a proporção).
+        self.tela = pygame.display.set_mode((LARGURA, ALTURA), pygame.SCALED)
         pygame.display.set_caption("Arrow the Target")
+        self.tela_cheia = False
+        if tela_cheia:
+            self.alternar_tela_cheia()
         self.relogio = pygame.time.Clock()
 
         self.entrada = Entrada(None, None, LARGURA, ALTURA)
@@ -149,6 +153,22 @@ class Jogo:
             self.iniciar_tutorial(depois="menu")
 
     # ---------------------------------------------------------------- estado da partida
+
+    def alternar_tela_cheia(self):
+        """Tela cheia como janela sem bordas do tamanho do monitor: não troca o modo de vídeo,
+        então Alt+Tab e a volta para a janela são instantâneos."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # surface do display ligada à Window
+            janela = pygame.Window.from_display_module()
+        self.tela_cheia = not self.tela_cheia
+        if self.tela_cheia:
+            janela.borderless = True
+            janela.position = (0, 0)
+            janela.size = pygame.display.get_desktop_sizes()[0]
+        else:
+            janela.borderless = False
+            janela.size = (LARGURA, ALTURA)
+            janela.position = pygame.WINDOWPOS_CENTERED
 
     @property
     def info_modo(self):
@@ -374,7 +394,7 @@ class Jogo:
 
     def executar(self):
         while True:
-            dt = min(self.relogio.tick(60) / 1000, 0.05)
+            dt = min(self.relogio.tick(FPS_MAXIMO) / 1000, 0.05)
             self.t_real += dt
             for ev in pygame.event.get():
                 if not self.tratar_evento(ev):
@@ -411,7 +431,7 @@ class Jogo:
         elif tecla == pygame.K_m and self.estado in ("JOGANDO", "PAUSADO", "RESULTADO"):
             self.mudar_estado("MENU")
         elif tecla == pygame.K_F11:
-            pygame.display.toggle_fullscreen()
+            self.alternar_tela_cheia()
         elif tecla == pygame.K_v and self.entrada.frontal and self.entrada.lateral:
             self.entrada.trocar_cameras()
             if self.estado in ("JOGANDO", "CALIBRANDO"):
@@ -438,7 +458,7 @@ class Jogo:
         elif tecla == pygame.K_k and self.camera_ok and self.estado in ("MENU", "JOGANDO", "CALIBRANDO"):
             self.iniciar_calibracao()
         elif tecla in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.estado == "CALIBRANDO":
-            if self.entrada.etapa == 2:
+            if self.entrada.etapa == ETAPA_TESTE:
                 self.comecar_partida()
             else:
                 self.entrada.avancar_etapa()
@@ -464,7 +484,7 @@ class Jogo:
                     elif acao == "tutorial":
                         self.iniciar_tutorial(depois="menu")
                     return
-        elif self.estado == "CALIBRANDO" and self.entrada.etapa == 2:
+        elif self.estado == "CALIBRANDO" and self.entrada.etapa == ETAPA_TESTE:
             self.comecar_partida()
         elif self.estado == "JOGANDO" and self.camera_flecha:
             self.camera_flecha = None
@@ -499,7 +519,7 @@ class Jogo:
         elif self.estado == "CALIBRANDO":
             self.cena.atualizar(self.t_real)
             self.entrada.calibrar(dt)
-            if self.entrada.etapa == 2:
+            if self.entrada.etapa == ETAPA_TESTE:
                 # Tiro de teste: usa o gesto normal e confirma com o polegar.
                 self.cmd = self.entrada.atualizar(dt)
                 self.som_da_puxada(self.cmd, dt)
@@ -788,7 +808,7 @@ class Jogo:
             self.botoes = telas.tela_cameras(self.tela, self.hud, self.fontes, self.rastreadores, self.escolha,
                                              self.procurando, self.t_real)
         elif self.estado == "CALIBRANDO":
-            forca = self.cmd.forca if self.cmd and self.cmd.puxando and self.entrada.etapa == 2 else 0.0
+            forca = self.cmd.forca if self.cmd and self.cmd.puxando and self.entrada.etapa == ETAPA_TESTE else 0.0
             telas.tela_calibracao(self.tela, self.hud, self.entrada, forca, self.t_real)
         elif self.estado == "PAUSADO":
             self.hud.tela_pausa(self.tela)

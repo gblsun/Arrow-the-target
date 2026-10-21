@@ -13,6 +13,7 @@ MADEIRA = (110, 72, 40)
 MADEIRA_CLARA = (160, 112, 64)
 VERDE = (120, 200, 110)
 VERMELHO = (220, 90, 70)
+LARGURA_PREVIEW = 176  # px de cada câmera no jogo (cresce 30% durante a puxada)
 
 
 def cor_forca(forca):
@@ -161,21 +162,37 @@ class Hud:
         self.f_pequena = _fonte(19)
         self.popups = []
         self._preview_surface = None
+        self._cache_textos, self._cache_paineis = {}, {}
 
     # ---------------------------------------------------------------- utilitários
 
+    def _render(self, texto, fonte, cor):
+        """Texto já renderizado: a maior parte do HUD repete os mesmos textos a cada quadro."""
+        chave = (texto, id(fonte), tuple(cor))
+        sup = self._cache_textos.get(chave)
+        if sup is None:
+            if len(self._cache_textos) > 600:
+                self._cache_textos.clear()
+            sup = self._cache_textos[chave] = fonte.render(texto, True, cor)
+        return sup
+
     def texto(self, tela, texto, fonte, cor, pos, ancora="topleft", sombra=True):
-        sup = fonte.render(texto, True, cor)
+        sup = self._render(texto, fonte, cor)
         rect = sup.get_rect(**{ancora: pos})
         if sombra:
-            tela.blit(fonte.render(texto, True, (20, 14, 8)), rect.move(2, 2))
+            tela.blit(self._render(texto, fonte, (20, 14, 8)), rect.move(2, 2))
         tela.blit(sup, rect)
         return rect
 
     def painel(self, tela, rect, alfa=170):
-        sup = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(sup, (34, 24, 16, alfa), sup.get_rect(), border_radius=10)
-        pygame.draw.rect(sup, (*OURO, 200), sup.get_rect(), 2, border_radius=10)
+        chave = (rect.size, alfa)
+        sup = self._cache_paineis.get(chave)
+        if sup is None:
+            if len(self._cache_paineis) > 100:
+                self._cache_paineis.clear()
+            sup = self._cache_paineis[chave] = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(sup, (34, 24, 16, alfa), sup.get_rect(), border_radius=10)
+            pygame.draw.rect(sup, (*OURO, 200), sup.get_rect(), 2, border_radius=10)
         tela.blit(sup, rect)
 
     def adicionar_popup(self, texto, cor, posicao):
@@ -222,15 +239,15 @@ class Hud:
         self.texto(tela, f"Recorde: {recorde}", self.f_pequena, PERGAMINHO, (rect.x + 18, rect.y + 58))
         self.texto(tela, f"Posto {posto[0]}: {posto[1]} m  (x{posto[2]:g})", self.f_pequena, PERGAMINHO, (rect.x + 18, rect.y + 82))
 
-        rect2 = pygame.Rect(self.largura - 16 - 270, 16, 270, 76)
+        if flechas is None and tempo_restante is None:
+            return self._vento(tela, vento, dificuldade, tendencia)  # treino livre: nada a contar
+        # Abaixo do placar: o canto superior direito é das câmeras.
+        rect2 = pygame.Rect(rect.x, rect.bottom + 12, 270, 76)
         self.painel(tela, rect2)
         self.texto(tela, modo or "Flechas", self.f_pequena, PERGAMINHO, (rect2.x + 16, rect2.y + 8))
         if tempo_restante is not None:
             cor = VERMELHO if tempo_restante < 10 else OURO
             self.texto(tela, f"{max(0, tempo_restante):04.1f} s", self.f_grande, cor, (rect2.right - 16, rect2.y + 26), "topright")
-            return self._vento(tela, vento, dificuldade, tendencia)
-        if flechas is None:
-            self.texto(tela, "flechas sem limite", self.f_pequena, OURO, (rect2.x + 16, rect2.y + 40))
             return self._vento(tela, vento, dificuldade, tendencia)
         for i in range(total_flechas):
             x = rect2.x + 18 + i * 16
@@ -324,13 +341,13 @@ class Hud:
                 tela.blit(sup, sup.get_rect(center=(x + deslocamento, y + deslocamento)))
 
     def previews(self, tela, rastreadores, entrada, forca=0.0, puxando=False):
-        """Câmeras no canto inferior esquerdo: imagem, esqueleto por papel, puxada na cor da força
+        """Câmeras no canto superior direito: imagem, esqueleto por papel, puxada na cor da força
         e uma faixa de status. Crescem durante a puxada para dar para ver o movimento."""
         self._escala_prev = m3.lerp(getattr(self, "_escala_prev", 1.0), 1.3 if puxando else 1.0, 0.15)
-        largura = int(224 * self._escala_prev)
+        largura = int(LARGURA_PREVIEW * self._escala_prev)
         altura = largura * 3 // 4
-        x = 16
-        y = self.altura - 16 - altura - 46
+        x = self.largura - 16 - len(rastreadores) * (largura + 16) + 16
+        y = 16
         for rastreador, papel in rastreadores:
             chave = papel.lower()
             rect = pygame.Rect(x, y, largura, altura + 46)
@@ -359,7 +376,7 @@ class Hud:
                 self.texto(tela, estado, self.f_pequena, VERDE, (x + 6, area.bottom + 23))
             x += largura + 16
         if entrada.canhoto:
-            self.texto(tela, "[canhoto]", self.f_pequena, OURO, (16, y - 14), "bottomleft")
+            self.texto(tela, "[canhoto]", self.f_pequena, OURO, (self.largura - 16, y + altura + 56), "topright")
 
     def painel_arco(self, tela, entrada, forca, puxando):
         """Painel "Seu arco" (tecla G): ícones grandes das duas mãos e a força."""

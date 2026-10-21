@@ -4,7 +4,7 @@ import math
 import pygame
 
 import mat3d as m3
-from entrada import ETAPAS_CALIBRACAO
+from entrada import ETAPA_DIREITA, ETAPA_ESQUERDA, ETAPA_PUXADA, ETAPA_REPOUSO, ETAPA_TESTE, ETAPAS_CALIBRACAO
 from hud import OURO, PERGAMINHO, VERDE, VERMELHO, desenhar_maos, desenhar_puxada, status_camera
 
 TINTA = (66, 44, 28)
@@ -92,14 +92,46 @@ def _seta(tela, a, b, cor=DESTAQUE):
         pygame.draw.line(tela, cor, b, (b[0] + 12 * math.cos(ang + d), b[1] + 12 * math.sin(ang + d)), 3)
 
 
+def ilustracao_uma_mao(tela, hud, rect, lado, t):
+    """Etapas 1 e 2: arqueiro de frente (como no espelho da câmera frontal), só uma mão levantada."""
+    pergaminho(tela, rect)
+    cx, base = rect.centerx, rect.y + 50
+    cabeca = (cx, base + 40)
+    pescoco, quadril = (cx, base + 64), (cx, base + 200)
+    pygame.draw.line(tela, TINTA, pescoco, quadril, 5)
+    pygame.draw.line(tela, TINTA, quadril, (cx - 36, base + 280), 5)
+    pygame.draw.line(tela, TINTA, quadril, (cx + 36, base + 280), 5)
+    aceno = 5 * math.sin(t * 5)
+    for nome, sinal in (("esquerda", -1), ("direita", 1)):  # espelhado: a esquerda aparece à esquerda
+        ombro = (cx + sinal * 32, base + 80)
+        if nome == lado:
+            # Esquerda à frente do corpo (arco); direita perto do rosto (âncora da corda).
+            cotovelo = (cx + sinal * 80, base + 110) if nome == "esquerda" else (cx + sinal * 70, base + 96)
+            mao = (cx + sinal * 96 + aceno, base + 64) if nome == "esquerda" else (cx + sinal * 40 + aceno, base + 22)
+        else:
+            cotovelo, mao = (cx + sinal * 44, base + 140), (cx + sinal * 50, base + 196)
+        cor = DESTAQUE if nome == lado else TINTA_CLARA
+        pygame.draw.line(tela, cor, (cx, base + 76), ombro, 5)
+        pygame.draw.line(tela, cor, ombro, cotovelo, 5)
+        pygame.draw.line(tela, cor, cotovelo, mao, 5)
+        _mao(tela, mao, fechada=False, cor=cor)
+        if nome == lado:
+            pygame.draw.circle(tela, DESTAQUE, (int(mao[0]), int(mao[1])), 26 + int(3 * math.sin(t * 5)), 2)
+            hud.texto(tela, nome, hud.f_pequena, DESTAQUE, (mao[0], mao[1] - 32), "midbottom", sombra=False)
+    pygame.draw.circle(tela, PAPEL, (int(cabeca[0]), int(cabeca[1])), 18)
+    pygame.draw.circle(tela, TINTA, (int(cabeca[0]), int(cabeca[1])), 20, 4)
+    hud.texto(tela, f"Só a mão {lado} levantada", hud.f_pequena, TINTA, (rect.centerx, rect.bottom - 44), "midbottom", sombra=False)
+    hud.texto(tela, "Você visto pela câmera frontal", hud.f_pequena, TINTA_CLARA, (rect.centerx, rect.bottom - 20), "midbottom", sombra=False)
+
+
 def ilustracao_arqueiro(tela, hud, rect, etapa, t):
     """Arqueiro de perfil (visão da câmera lateral), desenhado a tinta no pergaminho."""
     pergaminho(tela, rect)
     cx, base = rect.x + rect.w * 0.42, rect.y + 40
     # Movimento da mão direita na etapa de puxada: vai e volta entre repouso e âncora.
-    if etapa == 0:
+    if etapa == ETAPA_REPOUSO:
         u = 0.0
-    elif etapa == 1:
+    elif etapa == ETAPA_PUXADA:
         u = m3.ease_in_out(m3.vai_e_volta(t * 0.8, 1.0))
     else:
         u = 1.0
@@ -135,8 +167,8 @@ def ilustracao_arqueiro(tela, hud, rect, etapa, t):
     pygame.draw.line(tela, TINTA_CLARA, pontos[0], encaixe, 2)
     pygame.draw.line(tela, TINTA_CLARA, pontos[-1], encaixe, 2)
 
-    if etapa < 2:
-        ponta = (encaixe[0] + 175, encaixe[1] + (mao_esq[1] - encaixe[1]) * 175 / max(1, mao_esq[0] - encaixe[0]))
+    if etapa < ETAPA_TESTE:
+        ponta =(encaixe[0] + 175, encaixe[1] + (mao_esq[1] - encaixe[1]) * 175 / max(1, mao_esq[0] - encaixe[0]))
         pygame.draw.line(tela, (150, 104, 60), encaixe, ponta, 4)
         pygame.draw.polygon(tela, TINTA, [ponta, (ponta[0] - 12, ponta[1] - 6), (ponta[0] - 12, ponta[1] + 6)])
     else:
@@ -151,16 +183,16 @@ def ilustracao_arqueiro(tela, hud, rect, etapa, t):
     pygame.draw.polygon(tela, TINTA, [(cabeca[0] - 22, cabeca[1] - 6), (cabeca[0] + 4, cabeca[1] - 30),
                                       (cabeca[0] + 16, cabeca[1] - 10)])  # capuz
     _mao(tela, mao_esq, fechada=True)
-    _mao(tela, mao_dir, fechada=etapa < 2, cor=DESTAQUE)
+    _mao(tela, mao_dir, fechada=etapa < ETAPA_TESTE, cor=DESTAQUE)
     hud.texto(tela, "esquerda", hud.f_pequena, TINTA, (mao_esq[0] + 8, mao_esq[1] + 16), "midtop", sombra=False)
     if u < 0.5:
         hud.texto(tela, "direita", hud.f_pequena, DESTAQUE, (mao_dir[0] - 8, mao_dir[1] - 14), "midbottom", sombra=False)
     else:
         hud.texto(tela, "direita", hud.f_pequena, DESTAQUE, (mao_dir[0] + 14, mao_dir[1] + 14), "topleft", sombra=False)
-    if etapa == 1:
+    if etapa == ETAPA_PUXADA:
         _seta(tela, (repouso[0] - 20, repouso[1] + 44), (ancora[0] + 10, repouso[1] + 44))
         hud.texto(tela, "puxe até o rosto", hud.f_pequena, DESTAQUE, ((repouso[0] + ancora[0]) / 2, repouso[1] + 52), "midtop", sombra=False)
-    elif etapa == 2:
+    elif etapa == ETAPA_TESTE:
         hud.texto(tela, "abra a mão: solta!", hud.f_pequena, DESTAQUE, (mao_dir[0] + 40, mao_dir[1] - 34), "bottomleft", sombra=False)
 
     # Alvo à direita e câmera frontal ao lado dele.
@@ -181,9 +213,14 @@ def tela_calibracao(tela, hud, entrada, forca, t):
     hud.escurecer(tela, 150)
     etapa = entrada.etapa
     titulo, instrucoes = ETAPAS_CALIBRACAO[etapa]
-    hud.texto(tela, f"Calibração {etapa + 1}/3 · {titulo}", hud.f_grande, OURO, (hud.largura // 2, 46), "center")
+    hud.texto(tela, f"Calibração {etapa + 1}/{len(ETAPAS_CALIBRACAO)} · {titulo}", hud.f_grande, OURO,
+              (hud.largura // 2, 46), "center")
 
-    ilustracao_arqueiro(tela, hud, pygame.Rect(40, 100, 500, 400), etapa, t)
+    quadro = pygame.Rect(40, 100, 500, 400)
+    if etapa in (ETAPA_ESQUERDA, ETAPA_DIREITA):
+        ilustracao_uma_mao(tela, hud, quadro, "esquerda" if etapa == ETAPA_ESQUERDA else "direita", t)
+    else:
+        ilustracao_arqueiro(tela, hud, quadro, etapa, t)
 
     painel = pygame.Rect(570, 90, 670, 560)
     hud.painel(tela, painel, 200)
@@ -222,7 +259,7 @@ def tela_calibracao(tela, hud, entrada, forca, t):
 
     # Rodapé: contagem, progresso ou teste.
     barra = pygame.Rect(painel.x + 20, y, painel.w - 40, 22)
-    if etapa < 2:
+    if etapa < ETAPA_TESTE:
         if entrada.fase == "preparar":
             n = max(1, math.ceil(entrada.contagem))
             hud.texto(tela, f"Prepare-se... {n}", hud.f_media, OURO, (painel.centerx, y + 10), "center")

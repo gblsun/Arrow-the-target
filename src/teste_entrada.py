@@ -124,6 +124,24 @@ def teste_histerese():
     assert e.mao_fechada, "fechada continua fechada na zona intermediária"
 
 
+DURACAO_ETAPA = en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3
+
+
+def mostrar_uma_mao(e, fr, la, rotulo, x_lateral, segundos=DURACAO_ETAPA):
+    """Etapas 1 e 2: só uma mão aparece nas duas câmeras."""
+    for _ in range(int(segundos * 60)):
+        fr.mostrar([mao(0.45, 0.5, 0.15, False, rotulo)])
+        la.mostrar([mao(x_lateral, 0.5, 0.1)])
+        e.calibrar(1 / 60)
+
+
+def identificar(e, fr, la, rotulo_esq="Left", rotulo_dir="Right", x_esq=0.30, x_dir=0.60):
+    mostrar_uma_mao(e, fr, la, rotulo_esq, x_esq)
+    assert e.etapa == en.ETAPA_DIREITA, e.etapa
+    mostrar_uma_mao(e, fr, la, rotulo_dir, x_dir)
+    assert e.etapa == en.ETAPA_REPOUSO, (e.etapa, e.aviso)
+
+
 def calibrar(e, fr, la, x_corda, segundos):
     for _ in range(int(segundos * 60)):
         fr.mostrar([mao(0.45, 0.5, 0.15, False, "Left"), mao(0.55, 0.45, 0.12, True, "Right")])
@@ -131,25 +149,63 @@ def calibrar(e, fr, la, x_corda, segundos):
         e.calibrar(1 / 60)
 
 
+def calibrar_tudo(e, fr, la):
+    e.reiniciar_calibracao()
+    identificar(e, fr, la)
+    calibrar(e, fr, la, 0.38, DURACAO_ETAPA)
+    calibrar(e, fr, la, 0.70, DURACAO_ETAPA)
+
+
 def teste_calibracao():
     e, fr, la = nova_entrada()
     e.reiniciar_calibracao()
-    calibrar(e, fr, la, 0.38, en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3)
-    assert e.etapa == 1, e.etapa
-    calibrar(e, fr, la, 0.70, en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3)
-    assert e.etapa == 2 and e.calibrado
+    assert e.etapa == en.ETAPA_ESQUERDA
+    identificar(e, fr, la)
+    calibrar(e, fr, la, 0.38, DURACAO_ETAPA)
+    assert e.etapa == en.ETAPA_PUXADA, e.etapa
+    calibrar(e, fr, la, 0.70, DURACAO_ETAPA)
+    assert e.etapa == en.ETAPA_TESTE and e.calibrado
     esc = e.escalas["lateral"]
     assert abs(esc.repouso - 0.08) < 1e-6 and abs(esc.cheia - 0.40) < 1e-6, esc
     assert e.indice_corda_lateral == 1
     assert abs(e.centro[0] - 0.45) < 1e-6
 
 
+def teste_identificacao_maos():
+    """O MediaPipe troca os rótulos e a lateral vê a direita à esquerda: o jogo aprende os dois."""
+    e, fr, la = nova_entrada()
+    e.reiniciar_calibracao()
+    identificar(e, fr, la, rotulo_esq="Right", rotulo_dir="Left", x_esq=0.60, x_dir=0.30)
+    assert e.rotulos == {"esquerda": "Right", "direita": "Left"}, e.rotulos
+    assert e.lado_arco == "Right"
+    assert e.indice_corda_lateral == 0
+    arco, corda = mao(0.45, 0.5, 0.15, False, "Right"), mao(0.55, 0.45, 0.12, True, "Left")
+    assert e._papeis_frontal([corda, arco]) == (arco, corda)
+    a, c = e._papeis_lateral([mao(0.62, 0.5, 0.1), mao(0.32, 0.5, 0.1)])
+    assert c.palma[0] < a.palma[0], "a corda é a mão que estava à esquerda na lateral"
+
+
+def teste_identificacao_exige_uma_mao():
+    e, fr, la = nova_entrada()
+    e.reiniciar_calibracao()
+    for _ in range(int(DURACAO_ETAPA * 60)):  # as duas mãos levantadas: não conclui
+        fr.mostrar([mao(0.45, 0.5, 0.15, False, "Left"), mao(0.6, 0.45, 0.12, False, "Right")])
+        la.mostrar([mao(0.3, 0.5, 0.1)])
+        e.calibrar(1 / 60)
+    assert e.etapa == en.ETAPA_ESQUERDA and "só a mão esquerda" in e.aviso, (e.etapa, e.aviso)
+    mostrar_uma_mao(e, fr, la, "Left", 0.30)
+    # Na etapa da direita, o mesmo rótulo da esquerda não é aceito.
+    mostrar_uma_mao(e, fr, la, "Left", 0.60)
+    assert e.etapa == en.ETAPA_DIREITA and "confundiu" in e.aviso, (e.etapa, e.aviso)
+
+
 def teste_puxada_curta():
     e, fr, la = nova_entrada()
     e.reiniciar_calibracao()
-    calibrar(e, fr, la, 0.38, en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3)
-    calibrar(e, fr, la, 0.40, en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3)
-    assert e.etapa == 1 and "curta" in e.aviso, (e.etapa, e.aviso)
+    identificar(e, fr, la)
+    calibrar(e, fr, la, 0.38, DURACAO_ETAPA)
+    calibrar(e, fr, la, 0.40, DURACAO_ETAPA)
+    assert e.etapa == en.ETAPA_PUXADA and "curta" in e.aviso, (e.etapa, e.aviso)
 
 
 def teste_continuidade_lateral():
@@ -176,13 +232,15 @@ def teste_polegar():
 
 def teste_exportar_importar():
     e, fr, la = nova_entrada()
-    e.reiniciar_calibracao()
-    calibrar(e, fr, la, 0.38, en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3)
-    calibrar(e, fr, la, 0.70, en.TEMPO_PREPARO + en.TEMPO_ETAPA + 0.3)
+    calibrar_tudo(e, fr, la)
+    e.rotulos = {"esquerda": "Right", "direita": "Left"}
     dados = e.exportar_calibracao()
     outra, _, _ = nova_entrada()
     assert outra.importar_calibracao(dados) and outra.calibrado
     assert outra.escalas["lateral"] == e.escalas["lateral"] and outra.centro == e.centro
+    assert outra.rotulos == e.rotulos and outra.etapa == en.ETAPA_TESTE
+    antiga = {k: v for k, v in dados.items() if k != "rotulos"}  # salva antes das etapas novas
+    assert outra.importar_calibracao(antiga) and outra.rotulos == en.ROTULOS_PADRAO
     assert not outra.importar_calibracao({"centro": [0.5]})
 
 
@@ -286,7 +344,7 @@ def teste_sons():
 
 
 TESTES = [teste_kalman, teste_disparo, teste_forca_minima, teste_cancela_sem_mao, teste_histerese,
-          teste_calibracao, teste_puxada_curta, teste_continuidade_lateral, teste_polegar,
+          teste_calibracao, teste_identificacao_maos, teste_identificacao_exige_uma_mao, teste_puxada_curta, teste_continuidade_lateral, teste_polegar,
           teste_exportar_importar, teste_contagem_dedos, teste_troca_posto, teste_dedos_qualquer_mao,
           teste_one_euro, teste_angulo_para, teste_sons]
 

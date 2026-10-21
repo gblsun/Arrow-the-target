@@ -98,7 +98,7 @@ def recortar_near(poligono, near):
             saida.append(a)
         if dentro_a != dentro_b:
             t = (near - a[2]) / (b[2] - a[2])
-            saida.append(a + (b - a) * t)
+            saida.append(tuple(p + (q - p) * t for p, q in zip(a, b)))
     return saida
 
 

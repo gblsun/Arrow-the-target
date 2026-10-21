@@ -14,6 +14,7 @@ DIFUSA = 0.68
 NEBLINA_INICIO, NEBLINA_FIM, NEBLINA_MAX = 30.0, 170.0, 0.88
 NEAR = 0.15
 DISTANCIA_MAX = 230.0
+MARGEM_RECORTE = 150  # px fora da tela (na vertical) a partir dos quais o recorte 2D compensa
 
 
 # Paletas do ciclo de luz: o torneio começa à tarde e termina no pôr do sol.
@@ -64,29 +65,46 @@ class Iluminacao:
 ILUMINACAO = Iluminacao()
 
 
+def _arrays_da_malha(malha):
+    """Índices (preenchidos repetindo o último), contagem, cores e viés das faces em arrays.
+
+    Calculado uma vez por malha: os lotes dinâmicos são remontados a cada quadro.
+    """
+    dados = getattr(malha, "_arrays_lote", None)
+    if dados is None:
+        faces = malha.faces
+        largura = max(len(f) for f in faces)
+        dados = (np.array([f + (f[-1],) * (largura - len(f)) for f in faces], dtype=np.intp),
+                 np.array([len(f) for f in faces], dtype=np.intp),
+                 np.array(malha.cores, dtype=float).reshape(-1, 3),
+                 np.array(malha.vies, dtype=float))
+        malha._arrays_lote = dados
+    return dados
+
+
 class Lote:
     """Conjunto de faces já em coordenadas de mundo, pronto para desenho vetorizado."""
 
     def __init__(self, itens):
         """`itens`: lista de (malha, matriz_modelo, destaque)."""
-        vertices, faces, cores, vies, destaque = [], [], [], [], []
-        base = 0
-        for malha, m, realce in itens:
-            vertices.append(m3.aplicar(m, malha.vertices))
-            faces += [tuple(i + base for i in f) for f in malha.faces]
-            cores += malha.cores
-            vies += malha.vies
-            destaque += [realce] * len(malha.faces)
-            base += len(malha.vertices)
-        self.vazio = not faces
+        partes = [(m3.aplicar(m, malha.vertices), _arrays_da_malha(malha), realce)
+                  for malha, m, realce in itens if malha.faces]
+        self.vazio = not partes
         if self.vazio:
             return
-        self.vertices = np.vstack(vertices)
-        largura = max(len(f) for f in faces)
-        self.contagem = np.array([len(f) for f in faces])
-        self.indices = np.array([f + (f[-1],) * (largura - len(f)) for f in faces])
-        self.vies = np.array(vies, dtype=float)
-        self.destaque = np.array(destaque, dtype=bool)
+        largura = max(dados[0].shape[1] for _, dados, _ in partes)
+        indices, base = [], 0
+        for vertices, (ind, _, _, _), _ in partes:
+            if ind.shape[1] < largura:
+                ind = np.hstack((ind, np.repeat(ind[:, -1:], largura - ind.shape[1], axis=1)))
+            indices.append(ind + base)
+            base += len(vertices)
+        self.vertices = np.vstack([vertices for vertices, _, _ in partes])
+        self.indices = np.vstack(indices)
+        self.contagem = np.concatenate([dados[1] for _, dados, _ in partes])
+        cores = np.vstack([dados[2] for _, dados, _ in partes])
+        self.vies = np.concatenate([dados[3] for _, dados, _ in partes])
+        self.destaque = np.concatenate([np.full(len(dados[1]), realce, dtype=bool) for _, dados, realce in partes])
 
         v = self.vertices
         a, b, c = v[self.indices[:, 0]], v[self.indices[:, 1]], v[self.indices[:, 2]]
@@ -96,8 +114,10 @@ class Lote:
         # Centro da face sem contar os índices repetidos do preenchimento.
         self.mascara = np.arange(largura)[None, :] < self.contagem[:, None]
         self.centros = (v[self.indices] * self.mascara[..., None]).sum(axis=1) / self.contagem[:, None]
+        # Raio da esfera que envolve cada face (descarte grosso antes dos testes por vértice).
+        self.raios = np.sqrt(((v[self.indices] - self.centros[:, None]) ** 2).sum(axis=2).max(axis=1))
 
-        self.cores_base = np.array(cores, dtype=float)
+        self.cores_base = cores
         self._versao_luz = -1
         self._cores = None
 
@@ -185,24 +205,34 @@ class Renderizador:
         if lote.vazio:
             return []
         v_cam = m3.aplicar(self.visao, lote.vertices)
-        para_cam = self.posicao - lote.centros
-        frente = np.einsum("ij,ij->i", lote.normais, para_cam) > 0
-        z = v_cam[lote.indices, 2]
+        # Descarte grosso pela esfera de cada face: de costas, atrás, longe demais ou fora dos
+        # planos laterais do tronco de visão. Só as candidatas passam pelos testes por vértice.
+        c = m3.aplicar(self.visao, lote.centros)
+        r, cz = lote.raios, c[:, 2]
+        kx, ky = self.centro[0] / self.focal, self.centro[1] / self.focal
+        frente = np.einsum("ij,ij->i", lote.normais, self.posicao - lote.centros) > 0
+        cand = np.nonzero(frente & (cz + r > NEAR) & (cz - r < DISTANCIA_MAX)
+                          & (np.abs(c[:, 0]) - kx * cz < r * math.hypot(1, kx))
+                          & (np.abs(c[:, 1]) - ky * cz < r * math.hypot(1, ky)))[0]
+        if not len(cand):
+            return []
+        indices, contagem = lote.indices[cand], lote.contagem[cand]
+        z = v_cam[indices, 2]
         z_max = z.max(axis=1)
-        prof = (z * lote.mascara).sum(axis=1) / lote.contagem
-        visivel = frente & (z_max > NEAR) & (prof < DISTANCIA_MAX)
+        prof = (z * lote.mascara[cand]).sum(axis=1) / contagem
+        visivel = (z_max > NEAR) & (prof < DISTANCIA_MAX)
 
         # Descarte lateral: todos os vértices fora do mesmo lado do tronco de visão.
         zc = np.maximum(v_cam[..., 2], NEAR)
         sx = self.centro[0] + self.focal * v_cam[..., 0] / zc
         sy = self.centro[1] - self.focal * v_cam[..., 1] / zc
-        fx, fy = sx[lote.indices], sy[lote.indices]
+        fx, fy = sx[indices], sy[indices]
         atras = z < NEAR
         fora = ((fx < 0) & ~atras).all(1) | ((fx > self.largura) & ~atras).all(1) | ((fy > self.altura) & ~atras).all(1) | ((fy < 0) & ~atras).all(1)
         visivel &= ~fora
 
         neblina = np.clip((prof - NEBLINA_INICIO) / (NEBLINA_FIM - NEBLINA_INICIO), 0, NEBLINA_MAX)
-        cores = lote.cores * (1 - neblina[:, None]) + ILUMINACAO.neblina * neblina[:, None]
+        cores = lote.cores[cand] * (1 - neblina[:, None]) + ILUMINACAO.neblina * neblina[:, None]
 
         # Faces que cruzam o plano near são recortadas em 3D; as demais só precisam de
         # recorte 2D quando ultrapassam a janela. Faces menores que um pixel são ignoradas.
@@ -211,37 +241,35 @@ class Renderizador:
         fy_min, fy_max = fy.min(axis=1), fy.max(axis=1)
         minuscula = ~cruza_near & (fx_max - fx_min < 1.0) & (fy_max - fy_min < 1.0)
         visivel &= ~minuscula
-        excede = cruza_near | (fx_min < -4) | (fx_max > self.largura + 4) | (fy_min < -4) | (fy_max > self.altura + 4)
+        # O pygame percorre todas as linhas do polígono, mesmo fora da tela, e corta cada linha
+        # na horizontal sem custo: só vale recortar o que sai muito para cima ou para baixo.
+        excede = cruza_near | (fy_min < -MARGEM_RECORTE) | (fy_max > self.altura + MARGEM_RECORTE)
 
         sel = np.nonzero(visivel)[0]
-        chaves = (prof - lote.vies)[sel].tolist()
-        cores_sel = cores[sel].tolist()
-        pontos_sel = np.stack((fx[sel], fy[sel]), axis=2).tolist()
-        contagens = lote.contagem[sel].tolist()
-        destaques = lote.destaque[sel].tolist()
-        excede_sel = excede[sel].tolist()
-        near_sel = cruza_near[sel].tolist()
-
+        chaves = prof - lote.vies[cand]
+        destaque = lote.destaque[cand]
+        # Convertidas para listas em grupos pelo número de vértices: sem os índices de
+        # preenchimento, que custariam caro no tolist.
         saida = []
-        for k, i in enumerate(sel.tolist()):
-            n = contagens[k]
-            if near_sel[k]:
-                recortado = m3.recortar_near(list(v_cam[lote.indices[i, :n]]), NEAR)
-                if len(recortado) < 3:
-                    continue
-                pontos = m3.projetar(np.array(recortado), self.focal, self.centro).tolist()
-            else:
-                pontos = pontos_sel[k][:n]
-            saida.append((chaves[k], cores_sel[k], pontos, destaques[k], excede_sel[k]))
+        comuns = sel[~cruza_near[sel]]
+        for n in np.unique(contagem[comuns]).tolist():
+            g = comuns[contagem[comuns] == n]
+            saida += zip(chaves[g].tolist(), cores[g].tolist(), np.stack((fx[g, :n], fy[g, :n]), axis=2).tolist(),
+                         destaque[g].tolist(), excede[g].tolist())
+        # Só as poucas faces que cruzam o plano near precisam do recorte 3D.
+        f, (cx, cy) = self.focal, self.centro
+        for i in sel[cruza_near[sel]].tolist():
+            recortado = m3.recortar_near(v_cam[indices[i, :contagem[i]]].tolist(), NEAR)
+            if len(recortado) >= 3:
+                pontos = [(cx + f * x / z, cy - f * y / z) for x, y, z in recortado]
+                saida.append((float(chaves[i]), cores[i].tolist(), pontos, bool(destaque[i]), True))
         return saida
 
     def _recortar_tela(self, pontos):
         """Recorte 2D contra a janela: polígonos muito grandes fora da tela custam caro ao rasterizar."""
-        xs = [p[0] for p in pontos]
-        ys = [p[1] for p in pontos]
-        if min(xs) >= -4 and max(xs) <= self.largura + 4 and min(ys) >= -4 and max(ys) <= self.altura + 4:
-            return pontos
         for eixo, limite, sinal in ((0, -2, 1), (0, self.largura + 2, -1), (1, -2, 1), (1, self.altura + 2, -1)):
+            if all((p[eixo] - limite) * sinal >= 0 for p in pontos):
+                continue  # nenhum vértice passa desta borda
             saida = []
             n = len(pontos)
             for i in range(n):
