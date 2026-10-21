@@ -13,7 +13,7 @@ O MediaPipe com a API `mp.solutions` (usada em `ref/mediapipe`) precisa de Pytho
 ```bash
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python src\main.py                          # abre a escolha de câmeras, em tela cheia
+.venv\Scripts\python src\main.py                          # abre a escolha de câmeras, em tela cheia (janela sem bordas)
 .venv\Scripts\python src\main.py --sem-camera --janela    # mouse/teclado, em janela
 .venv\Scripts\python src\main.py --mudo                   # sem sons
 .venv\Scripts\python src\teste_mat3d.py                   # testes das transformações
@@ -23,6 +23,8 @@ py -3.12 -m venv .venv
 Ao abrir, a tela **Escolha das câmeras** lista as câmeras do Windows pelo nome, com uma prévia ao vivo de cada uma, e você marca qual é a frontal e qual é a lateral. A escolha fica salva em `src/config.json` e a tela é pulada nas próximas vezes; `Tab` no menu volta para ela. Câmeras virtuais (DroidCam, OBS) só têm sinal com o aplicativo delas transmitindo; "Procurar de novo" atualiza a lista.
 
 Sem webcam ou sem MediaPipe, o jogo continua funcionando só com mouse e teclado. Se uma câmera cair ou for desconectada, o jogo tenta reconectar sozinho.
+
+A tela cheia é uma **janela sem bordas do tamanho do monitor**: não troca o modo de vídeo, então `Alt+Tab` é instantâneo. O jogo desenha em 1280×720 e amplia mantendo a proporção; em monitores que não são 16:9 aparecem faixas pretas. `F11` alterna com a janela normal.
 
 ## Como jogar
 
@@ -38,6 +40,8 @@ No menu você digita o nome do arqueiro (clique na caixa ou `N`), escolhe o modo
 
 Os anéis valem 10, 8, 6, 4 e 2 pontos, de dentro para fora. Há 4 alvos fixos ou em movimento: dois fixos, um que corre num trilho e um pendurado que balança. De tempos em tempos aparece um **alvo bônus dourado** cruzando a clareira, que vale 25 pontos (vezes o multiplicador do posto).
 
+Durante a partida, o placar fica no canto superior esquerdo, com as flechas restantes (Torneio) ou o relógio (Contra o tempo) logo abaixo; no Treino livre esse segundo painel não aparece. O vento fica no centro, as câmeras no canto superior direito, e a ajuda e o fps no canto inferior direito.
+
 O vento muda a cada flecha e empurra o voo para o lado; as bandeiras mostram a direção dele. A **dificuldade é adaptativa**: acertando muito, o vento fica mais forte e os alvos móveis mais rápidos; errando, alivia (o painel do vento mostra "Dificuldade 1,2x"). A partida começa à tarde e termina no pôr do sol. Os 5 melhores de cada modo ficam no placar, com nome (`src/placar.json`).
 
 Em tiros bons (8, 10 ou bônus), a **câmera da flecha** acompanha o voo em câmera lenta até o alvo (`Espaço` ou clique pulam). O jogo sabe antes porque simula a trajetória no momento do disparo.
@@ -51,7 +55,7 @@ Use duas webcams: a **frontal** fica de frente para você e a **lateral** fica d
 - **Força**: é a distância entre as duas mãos, medida pela câmera lateral. De lado, essa distância aparece bem, mesmo quando você puxa em direção ao rosto. Sem a lateral, a frontal mede a força.
 - **Atirar**: abra a mão direita. Com força baixa demais, a puxada é cancelada.
 - **Trocar de posto**: mostre **1, 2 ou 3 dedos com qualquer mão** (indicador, indicador + médio, indicador + médio + anelar) por ~1 s. Um anel perto da mira mostra o progresso. Posto mais longe vale mais. Mostrar dedos com a mão da corda não é confundido com segurar a corda.
-- **Nas câmeras**:
+- **Nas câmeras** (prévias pequenas no canto superior direito; `C` esconde):
   - as prévias desenham o esqueleto de cada mão (azul = arco, cor da força = corda, com etiquetas E e D);
   - também mostram o arco, a corda e o rastro do movimento, na cor da força (verde, amarelo, vermelho);
   - crescem enquanto você puxa;
@@ -110,6 +114,28 @@ Cada cartão da tela de escolha mostra um destes estados:
 | Não abre | o dispositivo existe, mas não entrega imagem (ex.: OBS fechado) | abra o aplicativo da câmera e clique em "Procurar de novo" |
 
 Para usar **duas DroidCams**, cada celular precisa estar transmitindo numa fonte diferente (por exemplo *DroidCam Source 2* e *DroidCam Source 3*, ou uma delas e a *DroidCam Video*). Se uma câmera cair durante o jogo, o rastreador reconecta sozinho.
+
+### Webcam USB que conecta e cai
+
+Se uma webcam aparece e some (na prévia: "Sem sinal" ou "Desconectada, reconectando..."; no Gerenciador de Dispositivos: "Dispositivo USB Desconhecido (Falha na Solicitação de Descritor de Dispositivo)"), o problema costuma ser físico — energia ou banda da porta USB — e não o jogo:
+
+1. ligue a câmera direto numa porta do PC (de preferência na traseira), sem hub nem extensão;
+2. deixe as duas webcams em lados diferentes do PC, para não dividirem a mesma porta/controlador;
+3. desative a suspensão seletiva USB (Opções de Energia → Alterar configurações do plano → Configurações avançadas → USB → Suspensão seletiva → Desabilitada);
+4. se continuar caindo, teste a câmera em outro computador: se lá também cair, o defeito é do cabo ou da câmera.
+
+Depois de reconectar, `Tab` no menu e "Procurar de novo" atualizam a lista. Para ver se o Windows está enxergando as câmeras, no PowerShell: `Get-PnpDevice -Class Camera,Image -PresentOnly`.
+
+## Desempenho
+
+A cena é desenhada em software (numpy + `pygame.draw.polygon`), então o fps depende da CPU. O laço vai até 120 fps (`FPS_MAXIMO` em `main.py`) e o fps aparece no canto inferior direito.
+
+| Situação (medida num i7-3770) | fps |
+|---|---|
+| Sem câmeras (`--sem-camera`) | ~60 |
+| Com as duas câmeras e o MediaPipe | ~40 |
+
+Com as câmeras, as duas instâncias do MediaPipe (~30–40 ms por detecção cada) disputam a CPU com o desenho; numa CPU mais nova a diferença deve ser menor (não medido). As otimizações do renderizador estão descritas na [documentação técnica](docs/DOCUMENTACAO.md).
 
 ## Requisitos do enunciado
 
