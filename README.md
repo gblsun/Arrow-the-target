@@ -1,13 +1,21 @@
 # Arrow the Target
 
-
+![Arrow the Target: o arco em primeira pessoa mirando o alvo da esquerda, no posto de 15 m](docs/imagens/jogo-posto1.jpg)
 
 AP2 de Computação Gráfica RA/RV (CC6AM, 2026.2).
 
 
-## Vídeo demonstrativo
+## Vídeo de apresentação
 
-[Assista à demonstração do Arrow the Target no YouTube](https://youtu.be/HdlcKxR3SQQ).
+O vídeo mostra o jogo sendo jogado com as mãos: a calibração das mãos e do arco e os tiros nas três distâncias (postos de 15, 25 e 40 m).
+
+[![Vídeo de apresentação do Arrow the Target (clique para assistir)](docs/imagens/video-miniatura.jpg)](docs/video/video-apresentacao.mp4)
+
+[Assistir ao vídeo de apresentação](docs/video/video-apresentacao.mp4) (2 min 25 s) · [demonstração no YouTube](https://youtu.be/HdlcKxR3SQQ)
+
+| Calibração do arco | Jogando com o gesto | Tiro de longe |
+|---|---|---|
+| ![Jogador com o braço esquerdo esticado e a mão direita fechada junto ao corpo, calibrando o arco](docs/imagens/gesto-calibracao.jpg) | ![Jogador puxando a corda com a mão direita enquanto mira com a esquerda](docs/imagens/gesto-jogando.jpg) | ![Braço esticado segurando o arco diante do monitor, no posto de 40 m](docs/imagens/gesto-tela.jpg) |
 
 ## Equipe
 
@@ -79,9 +87,17 @@ A tela cheia é uma **janela sem bordas do tamanho do monitor**: não troca o mo
 
 Na **primeira vez**, depois da escolha de câmeras, o jogo mostra um **tutorial demonstrativo** (\~40 s, só para assistir). Nele, o arqueiro se joga sozinho enquanto duas "câmeras de demonstração" mostram mãos fazendo exatamente o gesto de cada etapa: mirar, puxar, soltar, trocar de posto pelos dedos, atirar de longe e acertar o bônus. Logo depois vem a **calibração** das suas mãos. O tutorial pode ser revisto no menu ("Como jogar", tecla `T`) e pulado com Enter.
 
+| Mirar com a mão esquerda | Puxar a corda com a mão direita |
+|---|---|
+| ![Tutorial, etapa Mirar: a mira fica dourada sobre o alvo e as câmeras de demonstração mostram as duas mãos](docs/imagens/tutorial-mirar.jpg) | ![Tutorial, etapa Puxar a corda: a mão direita fechada recua e a força chega a 73%](docs/imagens/tutorial-puxar.jpg) |
+| **Trocar de posto mostrando dedos** | **Acertar o alvo bônus** |
+| ![Tutorial, etapa Trocar de posto: dois dedos levantados levam ao posto 2](docs/imagens/tutorial-trocar-posto.jpg) | ![Tutorial, etapa Alvo bônus: a flecha crava no alvo dourado e aparece "Bônus! +50"](docs/imagens/tutorial-bonus.jpg) |
+
 
 
 No menu você digita o nome do arqueiro (clique na caixa ou `N`), escolhe o modo (setas ou clique) e joga (Enter, clique ou fechando a mão direita).
+
+![Menu: nome do arqueiro, escolha do modo (Torneio, Contra o tempo, Treino livre) e os melhores do modo](docs/imagens/menu.jpg)
 
 
 
@@ -107,9 +123,15 @@ Durante a partida, o placar fica no canto superior esquerdo, com as flechas rest
 
 O vento muda a cada flecha e empurra o voo para o lado; as bandeiras mostram a direção dele. A **dificuldade é adaptativa**: acertando muito, o vento fica mais forte e os alvos móveis mais rápidos; errando, alivia (o painel do vento mostra "Dificuldade 1,2x"). A partida começa à tarde e termina no pôr do sol. Os 5 melhores de cada modo ficam no placar, com nome (`src/placar.json`).
 
+| No posto 3 (40 m, x3), já no pôr do sol | Fim do torneio |
+|---|---|
+| ![Partida no posto 3, a 40 m, com o céu alaranjado do pôr do sol e a barra de força cheia](docs/imagens/jogo-posto3-por-do-sol.jpg) | ![Tela de resultado: pontuação, gráfico dos acertos de cada flecha e o placar da clareira](docs/imagens/resultado.jpg) |
+
 
 
 Em tiros bons (8, 10 ou bônus), a **câmera da flecha** acompanha o voo em câmera lenta até o alvo (`Espaço` ou clique pulam). O jogo sabe antes porque simula a trajetória no momento do disparo.
+
+![Câmera da flecha: a câmera segue a flecha em câmera lenta até o centro do alvo](docs/imagens/camera-da-flecha.jpg)
 
 
 
