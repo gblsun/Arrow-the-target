@@ -15,17 +15,18 @@
 
 [![AP2](https://img.shields.io/badge/AP2-Computa%C3%A7%C3%A3o%20Gr%C3%A1fica%20RA%2FRV-8B5A2B?style=flat-square&logo=bookstack&logoColor=white)](docs/enunciado_AP2.pdf)
 [![Semestre](https://img.shields.io/badge/CC6AM-2026.2-E8A33D?style=flat-square)](#-equipe)
-[![Sem OpenGL](https://img.shields.io/badge/render-100%25%20software-2E4A1F?style=flat-square&logo=blender&logoColor=white)](#-destaques)
+[![Renderização em software, sem OpenGL](https://img.shields.io/badge/renderiza%C3%A7%C3%A3o-software%2C%20sem%20OpenGL-2E4A1F?style=flat-square&logo=blender&logoColor=white)](#-destaques)
 [![Gestos](https://img.shields.io/badge/controle-gestos%20das%20m%C3%A3os-C0392B?style=flat-square&logo=handshake&logoColor=white)](#-gesto-do-arco-duas-câmeras)
 [![Duas câmeras](https://img.shields.io/badge/%F0%9F%93%B7%20webcams-frontal%20%2B%20lateral-6D4C41?style=flat-square)](#-câmeras-detecção-e-problemas-comuns)
-[![Feito com](https://img.shields.io/badge/feito%20com-%E2%9D%A4%EF%B8%8F%20e%20matrizes-E8A33D?style=flat-square)](#-requisitos-do-enunciado)
-[![Último commit](https://img.shields.io/github/last-commit/gblsun/Arrow-the-target?style=flat-square&color=8B5A2B&label=%C3%BAltimo%20commit)](https://github.com/gblsun/Arrow-the-target/commits/main)
+[![3D com matrizes 4×4 do NumPy](https://img.shields.io/badge/3D-matrizes%204%C3%974%20do%20NumPy%20%28T%C2%B7R%C2%B7S%29-E8A33D?style=flat-square&logo=numpy&logoColor=white)](#-requisitos-do-enunciado)
+[![Último commit](https://img.shields.io/github/last-commit/gblsun/Arrow-the-target?style=flat-square&color=8B5A2B&label=%C3%BAltimo%20commit%20na%20main)](https://github.com/gblsun/Arrow-the-target/commits/main)
 [![Tamanho](https://img.shields.io/github/repo-size/gblsun/Arrow-the-target?style=flat-square&color=2E4A1F&label=tamanho)](https://github.com/gblsun/Arrow-the-target)
 
 <br />
 
 **[🎬 Vídeo](#-vídeo-de-apresentação)** &nbsp;·&nbsp;
 **[✨ Destaques](#-destaques)** &nbsp;·&nbsp;
+**[🧠 Mapa mental](#-mapa-mental)** &nbsp;·&nbsp;
 **[🚀 Como rodar](#-como-rodar)** &nbsp;·&nbsp;
 **[🎮 Como jogar](#-como-jogar)** &nbsp;·&nbsp;
 **[🏹 Gesto do arco](#-gesto-do-arco-duas-câmeras)** &nbsp;·&nbsp;
@@ -49,6 +50,7 @@ AP2 de Computação Gráfica RA/RV (CC6AM, 2026.2). Documentação técnica (arq
 
 - [🎬 Vídeo de apresentação](#-vídeo-de-apresentação)
 - [✨ Destaques](#-destaques)
+- [🧠 Mapa mental](#-mapa-mental)
 - [👥 Equipe](#-equipe)
 - [🚀 Como rodar](#-como-rodar)
 - [🎮 Como jogar](#-como-jogar)
@@ -129,6 +131,52 @@ Um tutorial que se joga sozinho mostra cada gesto; depois a calibração aprende
 </td>
 </tr>
 </table>
+
+---
+
+## 🧠 Mapa mental
+
+Uma visão geral do projeto em um só lugar: o que é o jogo, como se controla, o papel de cada câmera, a computação gráfica por trás e como o repositório está organizado.
+
+```mermaid
+mindmap
+  root((🏹 Arrow the Target))
+    🎮 Jogo
+      Torneio: 15 flechas, 3 postos, x1 x2 x3
+      Contra o tempo: 60 s
+      Treino livre
+      Alvos fixos, no trilho, em pêndulo e bônus
+      Vento e dificuldade adaptativa
+      Placar com os 5 melhores
+    ✋ Controle
+      Mão esquerda mira
+      Mão direita fechada puxa, aberta solta
+      1, 2 ou 3 dedos trocam de posto
+      Mouse e teclado como alternativa
+    📷 Câmeras
+      Frontal: mira
+      Lateral: força da puxada
+      MediaPipe Hands
+      DirectShow e Media Foundation
+      Reconexão automática
+    🧮 Computação gráfica
+      Matrizes 4x4: T, R, S
+      Câmera e perspectiva
+      Recorte e algoritmo do pintor
+      Sombra projetada
+      Animação por Δt
+    ✨ Experiência
+      Tutorial demonstrativo
+      Calibração guiada por arqueiro
+      Câmera da flecha
+      Sons sintetizados
+      Pôr do sol durante a partida
+    🗂️ Projeto
+      src: código do jogo
+      docs: documentação, imagens e vídeo
+      Testes de matrizes e de gestos
+      Equipe de 4 alunos
+```
 
 ---
 
@@ -370,7 +418,7 @@ ref/                         material de referência da disciplina
 
 **🏹 Arrow the Target** · AP2 de Computação Gráfica RA/RV · 2026.2
 
-<sub>Feito com pygame, NumPy, OpenCV e MediaPipe — e muitas matrizes 4×4.</sub>
+<sub>Feito com pygame, NumPy, OpenCV e MediaPipe. Todo o 3D (posição, rotação, escala, câmera e perspectiva) é calculado com matrizes 4×4 do NumPy, sem OpenGL.</sub>
 
 <br />
 
