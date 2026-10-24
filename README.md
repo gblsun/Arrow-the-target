@@ -348,6 +348,10 @@ docs/
 
   DOCUMENTACAO.md            documentação técnica do projeto
 
+  imagens/                   capturas do jogo e fotos do vídeo usadas neste README
+
+  video/                     vídeo de apresentação do jogo
+
 src/
 
   main.py                    laço do jogo e máquina de estados
